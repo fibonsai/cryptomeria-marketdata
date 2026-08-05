@@ -66,7 +66,7 @@ synchronization, automatic reconnection, and data normalization. This
 binary loads the config, creates the stream, and forwards each item to
 NATS.
 
-See `adr/ADR-1.md` for the architectural decision record.
+See `docs/docs/ADR-001-using-cryptomeria-ingest.md` for the architectural decision record.
 
 ## License
 
