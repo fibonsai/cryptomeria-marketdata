@@ -35,7 +35,8 @@ broker.
 - `src/forward.rs` - NATS subject resolution, encoding, publisher
 - `src/bin/marketdata.rs` - CLI entry point
 - `config.toml` - Default configuration
-- `adr/ADR-1.md` - Architecture decision record
+- `docs/ADR-*.md` - Architecture decision record
+
 
 ## Key Implementation Details
 - Uses `cryptomeria-ingest` as a library dependency (path: `../cryptomeria-ingest`)
