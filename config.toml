@@ -1,0 +1,21 @@
+[source]
+exchange = "okx"
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "both"
+max_level = 10
+max_level_pct = 0.0
+snapshot_depth = 400
+
+[source.resilience]
+initial_backoff_ms = 1000
+max_backoff_ms = 60000
+backoff_multiplier = 2.0
+jitter_ms = 1000
+heartbeat_interval_secs = 0
+max_attempts = 0
+
+[nats]
+url = "nats://localhost:4222"
+subject_lob = "marketdata.lob"
+subject_trade = "marketdata.trade"
