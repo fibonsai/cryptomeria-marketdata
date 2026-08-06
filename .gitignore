@@ -62,3 +62,6 @@ cobertura.xml
 # Ignore worktrees
 .worktrees/**
 .grepai/
+
+# Ignore TODO temp file
+TODO
