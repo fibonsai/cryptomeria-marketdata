@@ -8,7 +8,7 @@ repository = "https://github.com/fibonsai/criptomeria-marketdata"
 keywords = ["crypto", "market-data", "nats", "order-book", "trades"]
 
 [dependencies]
-cryptomeria-ingest = { path = "../cryptomeria-ingest" }
+cryptomeria-ingest = { git = "https://github.com/fibonsai/cryptomeria-ingest" }
 async-nats = { version = "0.50", default-features = false }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
