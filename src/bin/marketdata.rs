@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     };
 
     let subscriber = if cli.data_out {
-        let sub = StdoutSubscriber::connect(app.nng.port)
+        let sub = StdoutSubscriber::connect(app.nng.port, &app.source.exchange)
             .with_context(|| format!("failed to start log subscriber on port {}", app.nng.port))?;
         Some(sub)
     } else {
