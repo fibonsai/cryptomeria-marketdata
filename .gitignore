@@ -69,3 +69,4 @@ cobertura.xml
 
 # Ignore TODO temp file
 TODO
+.worktrees/
