@@ -2,14 +2,13 @@ use cryptomeria_ingest::{DataKind, DataSourceConfig, ResilienceConfig};
 use serde::Deserialize;
 
 const DEFAULT_SNAPSHOT_DEPTH: usize = 400;
-const DEFAULT_SUBJECT_LOB: &str = "marketdata.lob";
-const DEFAULT_SUBJECT_TRADE: &str = "marketdata.trade";
+const DEFAULT_NNG_PORT: u16 = 14242;
 
 /// Top-level application configuration, loaded from a TOML file.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub source: SourceConfig,
-    pub nats: NatsConfig,
+    pub nng: NngConfig,
 }
 
 /// Exchange WebSocket subscription settings.
@@ -30,26 +29,19 @@ pub struct SourceConfig {
     pub resilience: ResilienceConfig,
 }
 
-/// NATS broker settings.
+/// NNG PUB/SUB broker settings (TCP transport).
 #[derive(Debug, Clone, Deserialize)]
-pub struct NatsConfig {
-    pub url: String,
-    #[serde(default = "default_subject_lob")]
-    pub subject_lob: String,
-    #[serde(default = "default_subject_trade")]
-    pub subject_trade: String,
+pub struct NngConfig {
+    #[serde(default = "default_nng_port")]
+    pub port: u16,
 }
 
 fn default_snapshot_depth() -> usize {
     DEFAULT_SNAPSHOT_DEPTH
 }
 
-fn default_subject_lob() -> String {
-    DEFAULT_SUBJECT_LOB.into()
-}
-
-fn default_subject_trade() -> String {
-    DEFAULT_SUBJECT_TRADE.into()
+fn default_nng_port() -> u16 {
+    DEFAULT_NNG_PORT
 }
 
 /// Configuration parsing/validation error.
@@ -128,8 +120,8 @@ region = "global"
 instrument = "BTC-USDT"
 data_kind = "both"
 
-[nats]
-url = "nats://localhost:4222"
+[nng]
+port = 14242
 "#;
 
     #[test]
@@ -139,7 +131,7 @@ url = "nats://localhost:4222"
         assert_eq!(config.source.region, "global");
         assert_eq!(config.source.instrument, "BTC-USDT");
         assert_eq!(config.source.data_kind, "both");
-        assert_eq!(config.nats.url, "nats://localhost:4222");
+        assert_eq!(config.nng.port, 14242);
     }
 
     #[test]
@@ -147,8 +139,38 @@ url = "nats://localhost:4222"
         let config = parse_config(VALID_TOML).unwrap();
         assert_eq!(config.source.snapshot_depth, DEFAULT_SNAPSHOT_DEPTH);
         assert_eq!(config.source.max_level, None);
-        assert_eq!(config.nats.subject_lob, DEFAULT_SUBJECT_LOB);
-        assert_eq!(config.nats.subject_trade, DEFAULT_SUBJECT_TRADE);
+        assert_eq!(config.nng.port, DEFAULT_NNG_PORT);
+    }
+
+    #[test]
+    fn nng_port_defaults_to_14242_when_omitted() {
+        let toml = r#"
+[source]
+exchange = "okx"
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+
+[nng]
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.nng.port, DEFAULT_NNG_PORT);
+    }
+
+    #[test]
+    fn parses_custom_nng_port() {
+        let toml = r#"
+[source]
+exchange = "okx"
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+
+[nng]
+port = 9999
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.nng.port, 9999);
     }
 
     #[test]
@@ -165,8 +187,8 @@ max_backoff_ms = 5000
 backoff_multiplier = 2.0
 jitter_ms = 100
 
-[nats]
-url = "nats://localhost:4222"
+[nng]
+port = 14242
 "#;
         let config = parse_config(toml).unwrap();
         assert_eq!(config.source.resilience.initial_backoff_ms, 500);
@@ -181,13 +203,10 @@ url = "nats://localhost:4222"
     }
 
     #[test]
-    fn rejects_missing_nats_url() {
+    fn rejects_missing_source_section() {
         let toml = r#"
-[source]
-exchange = "okx"
-region = "global"
-instrument = "BTC-USDT"
-data_kind = "lob"
+[nng]
+port = 14242
 "#;
         let err = parse_config(toml).unwrap_err();
         assert!(matches!(err, ConfigError::InvalidToml(_)));

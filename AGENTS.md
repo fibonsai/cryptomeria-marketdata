@@ -1,9 +1,18 @@
 # Criptomeria-Marketdata Agent Instructions
 
+## Required Skills
+
+**ALWAYS load `rust-coding` and `rust-tdd` skills before writing, reviewing, or refactoring any Rust code.**
+
+- `rust-coding` — idiomatic Rust patterns, naming, error handling, module structure, lint/format/test conventions, and review standards.
+- `rust-tdd` — Test-Driven Development cycle (RED → GREEN → REFACTOR). No production code without a failing test first.
+
+This is mandatory, not optional. Any Rust work without these skills loaded must load them before proceeding.
+
 ## Project Overview
 Rust application that connects to crypto exchange WebSocket streams via
-`cryptomeria-ingest` and forwards normalized LOB/trade data to a NATS
-broker.
+`cryptomeria-ingest` and forwards normalized LOB/trade data to subscribers
+over a TCP socket using NNG pub/sub.
 
 ## Essential Commands
 
@@ -21,21 +30,25 @@ broker.
 - `make coverage-report` - Serve HTML coverage report locally
 - `make audit` - Run cargo-audit (fails on vulnerabilities)
 - `cargo run --bin marketdata -- --help` - Show CLI help
-- `cargo run --bin marketdata -- --dry-run` - Test without NATS
+- `cargo run --bin marketdata -- --dry-run` - Test without NNG broker
+- `cargo run --bin marketdata -- --data-out --test-timeout-secs 10` - Log all topics, auto-exit after 10s (CI-safe)
 
 ### Testing Details
-- Unit tests: Located alongside source in `src/config.rs` and `src/forward.rs`
-- Integration tests: Not yet implemented (would require NATS + exchange WS)
+- Unit tests: Located alongside source in `src/config.rs`, `src/forward.rs`, `src/registry.rs`, `src/broker.rs`, `src/subscriber.rs`
+- Integration: An in-process NNG smoke test (`broker::tests`) binds an ephemeral port and verifies topic/payload delivery without external services
 
-**ALWAYS load `rust-tdd` skill before create or update tests.**
+**ALWAYS load `rust-coding` and `rust-tdd` skills before create or update tests.**
 
 ## Project Structure
-- `src/lib.rs` - Library exports (`config`, `forward`)
-- `src/config.rs` - Application configuration parsing/validation
-- `src/forward.rs` - NATS subject resolution, encoding, publisher
-- `src/bin/marketdata.rs` - CLI entry point
-- `config.toml` - Default configuration
-- `docs/ADR-*.md` - Architecture decision record
+- `src/lib.rs` — Library exports (`config`, `forward`, `registry`, `broker`, `subscriber`)
+- `src/config.rs` — Application configuration parsing/validation
+- `src/forward.rs` — Pure helpers: topic construction, JSON payload building, frame splitting, log prefix
+- `src/registry.rs` — In-process subscriber registry for per-topic counts
+- `src/broker.rs` — NNG PUB broker + dedicated sender thread
+- `src/subscriber.rs` — Built-in NNG SUB log subscriber
+- `src/bin/marketdata.rs` — CLI entry point
+- `config.toml` — Default configuration
+- `docs/adr/Core Architecture/` — Architecture decision records
 
 
 ## Key Implementation Details
@@ -43,23 +56,31 @@ broker.
 - Normalizes data into `MarketDataItem` enum (Lob or Trade variants)
 - Implements snapshot-first stream pattern (first LobItem is full snapshot)
 - Automatic reconnection with exponential backoff + jitter (via `cryptomeria-ingest`)
-- NATS publishing with `async-nats` (Tokio-compatible)
-- No task leaks: background tasks abort when stream is dropped
+- NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
+- Dynamic topics: `{type}__{instrument}` (e.g. `lob__btcusd`, `trade__btcusd`)
+- Payload JSON augmented with `exchange` field when missing
+- In-process `SubscriberRegistry` tracks per-topic subscriber counts (NNG PUB/SUB does not expose subscription state to publisher)
+- Built-in log subscriber (NNG SUB with empty prefix) logs to stdout with `tracing` when `--data-out` is passed
+- Periodic subscriber count JSON reporting at `--show-subscriber-count-secs` interval (default 5s)
+- `--test-timeout-secs` for CI/automated verification (0 = no timeout)
+- No task leaks: background tasks abort on shutdown signal
 - Pure functions for parsing/subscription building (testable without I/O)
 
 ## Development Guidelines
 - Follow Rust idioms and Rustfmt conventions
 - Clippy warnings treated as errors in CI
 - Documentation comments encouraged for public APIs
-- Add new config fields: Extend `SourceConfig`/`NatsConfig` in `src/config.rs`
-- Add new data handling: Extend `forward.rs`
+- Add new config fields: Extend `SourceConfig`/`NngConfig` in `src/config.rs`
+- Add new data handling: Extend `forward.rs` (topic/payload/log helpers)
 - Configuration includes resilience settings, snapshot depth, level filtering
+- **ALWAYS load `rust-coding` and `rust-tdd` skills before writing, reviewing, or refactoring any Rust code**
 
 ## Configuration
-- See `src/config.rs` for `AppConfig`, `SourceConfig`, `NatsConfig`
+- See `src/config.rs` for `AppConfig`, `SourceConfig`, `NngConfig`
 - Supported exchanges: "okx", "kraken", "bitstamp"
 - Data kinds: "lob", "trade", "both", "lob|trade"
 - Resilience settings: initial_backoff_ms, max_backoff_ms, backoff_multiplier, jitter_ms, heartbeat_interval_secs, max_attempts
+- NNG port: default 14242 (configurable in `[nng]` section or `--port` CLI flag)
 
 ## Adding Tests
 - Unit tests live in `#[cfg(test)] mod tests` blocks in `config.rs` and `forward.rs`
