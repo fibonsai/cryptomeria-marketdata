@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use nng::options::protocol::pubsub::Subscribe;
 use nng::options::{Options, RecvTimeout};
-use nng::{Error, Message, Protocol, Socket};
+use nng::{Error, Protocol, Socket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
