@@ -58,7 +58,7 @@ over a TCP socket using NNG pub/sub.
 - NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
 - Dynamic topics: `{type}__{instrument}` (e.g. `lob__btcusd`, `trade__btcusd`)
 - Payload JSON preserved exactly as received (no fields added)
-- Built-in log subscriber (NNG SUB with empty prefix) logs to stdout with `tracing` when `--data-out` is passed
+- Built-in log subscriber (NNG SUB with empty prefix) logs raw payload JSON to stdout with `tracing` when `--data-out` is passed
 - `--test-timeout-secs` for CI/automated verification (0 = no timeout)
 - No task leaks: background tasks abort on shutdown signal
 - Pure functions for parsing/subscription building (testable without I/O)
