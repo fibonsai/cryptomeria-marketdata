@@ -51,13 +51,13 @@ over a TCP socket using NNG pub/sub.
 
 
 ## Key Implementation Details
-- Uses `cryptomeria-ingest` as a library dependency (path: `../cryptomeria-ingest`)
+- Uses `cryptomeria-ingest` as a library dependency (git: `github.com/fibonsai/cryptomeria-ingest`)
 - Normalizes data into `MarketDataItem` enum (Lob or Trade variants)
 - Implements snapshot-first stream pattern (first LobItem is full snapshot)
 - Automatic reconnection with exponential backoff + jitter (via `cryptomeria-ingest`)
 - NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
 - Dynamic topics: `{type}__{instrument}` (e.g. `lob__btcusd`, `trade__btcusd`)
-- Payload JSON augmented with `exchange` field when missing
+- Payload JSON preserved exactly as received (no fields added)
 - Built-in log subscriber (NNG SUB with empty prefix) logs to stdout with `tracing` when `--data-out` is passed
 - `--test-timeout-secs` for CI/automated verification (0 = no timeout)
 - No task leaks: background tasks abort on shutdown signal

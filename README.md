@@ -13,7 +13,7 @@ and forwards the normalized events to subscribers over a TCP socket using
 - NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
 - Dynamic per-item topics named `{type}__{instrument}` (e.g. `lob__btcusd`,
   `trade__btcusd`)
-- Payload JSON augmented with the `exchange` field when missing
+- Payload JSON preserved exactly as received from `cryptomeria-ingest`
 - Built-in log subscriber (gated by `--data-out`) that connects locally
   and logs every topic to stdout with the `[type-exchange]` prefix tag
 - Async logging via `tracing` (no `println!`)
@@ -92,12 +92,12 @@ subscriber splits the frame back into `(topic, payload)`.
 - `topic` = `{lob|trade}__{normalized_instrument}`
   (e.g. `lob__btcusdt`, `trade__ethusdt`)
 - `payload` = JSON of the `MarketDataItem` from `cryptomeria-ingest`,
-  augmented with `"exchange":"<exchange>"` if missing
+  preserved byte-for-byte (no fields added)
 
 Example payload:
 
 ```json
-{"Lob":{"asks":[{"price":64738.0,"size":0.55}], "bids":[...], "ts":1786036204909},"exchange":"okx"}
+{"trade":{"exchange":"okx","price":100.0,"size":1.0,"side":"buy","ts":1786036204909}}
 ```
 
 ## Logging
