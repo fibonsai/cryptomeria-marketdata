@@ -1,5 +1,4 @@
 use crate::forward::frame_message;
-use crate::registry::SharedRegistry;
 use anyhow::{Context, Result, anyhow};
 use nng::options::{Options, SendTimeout};
 use nng::{Message, Protocol, Socket};
@@ -13,18 +12,15 @@ const SEND_TIMEOUT_MS: u64 = 1000;
 /// The NNG PUB socket serving dynamic `type__instrument` topics over TCP.
 ///
 /// Publishing is queued to a dedicated sender thread so the async caller never
-/// blocks on a slow subscriber. Subscriber counts are tracked in a shared
-/// [`SharedRegistry`] because NNG does not expose subscription state to a
-/// publisher.
+/// blocks on a slow subscriber.
 pub struct Broker {
     sender: Option<SyncSender<Vec<u8>>>,
-    registry: SharedRegistry,
     handle: Option<JoinHandle<()>>,
 }
 
 impl Broker {
     /// Bind an NNG PUB socket on `tcp://0.0.0.0:{port}` and spawn its sender thread.
-    pub fn bind(port: u16, registry: SharedRegistry) -> Result<Self> {
+    pub fn bind(port: u16) -> Result<Self> {
         let socket = Socket::new(Protocol::Pub0).context("failed to create NNG pub socket")?;
         socket
             .set_opt::<SendTimeout>(Some(Duration::from_millis(SEND_TIMEOUT_MS)))
@@ -41,7 +37,6 @@ impl Broker {
 
         Ok(Self {
             sender: Some(sender),
-            registry,
             handle: Some(handle),
         })
     }
@@ -49,7 +44,6 @@ impl Broker {
     /// Queue a message for the given topic. Never blocks the caller: when the
     /// channel is full the message is dropped and a warning is logged.
     pub fn publish(&self, topic: &str, payload: &[u8]) -> Result<()> {
-        self.registry.record_topic(topic);
         let sender = self
             .sender
             .as_ref()
@@ -63,11 +57,6 @@ impl Broker {
             }
             Err(mpsc::TrySendError::Disconnected(_)) => Err(anyhow!("NNG broker thread is gone")),
         }
-    }
-
-    /// Read access to the shared subscriber registry.
-    pub fn registry(&self) -> &SharedRegistry {
-        &self.registry
     }
 
     /// Stop the sender thread and drop the socket.
@@ -98,7 +87,6 @@ fn sender_thread(socket: Socket, receiver: mpsc::Receiver<Vec<u8>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::Subscriber;
     use nng::options::RecvTimeout;
     use nng::options::protocol::pubsub::Subscribe;
 
@@ -111,8 +99,7 @@ mod tests {
     #[test]
     fn delivers_published_message_to_subscriber() {
         let port = ephemeral_port();
-        let registry = SharedRegistry::new();
-        let broker = Broker::bind(port, registry.clone()).unwrap();
+        let broker = Broker::bind(port).unwrap();
 
         let sub = Socket::new(Protocol::Sub0).unwrap();
         sub.set_opt::<Subscribe>(b"lob__btcusdt".to_vec()).unwrap();
@@ -130,24 +117,5 @@ mod tests {
             crate::forward::split_frame(message.as_slice()).expect("message is well framed");
         assert_eq!(topic, "lob__btcusdt");
         assert_eq!(payload, br#"{"ts":123}"#);
-    }
-
-    #[test]
-    fn records_published_topics_in_registry() {
-        let port = ephemeral_port();
-        let registry = SharedRegistry::new();
-        let broker = Broker::bind(port, registry.clone()).unwrap();
-        broker.publish("lob__btcusdt", b"{}").unwrap();
-        broker.publish("trade__btcusdt", b"{}").unwrap();
-        assert_eq!(registry.count_for_topic("lob__btcusdt"), 0);
-        assert_eq!(registry.subscriber_count(), 0);
-    }
-
-    #[test]
-    fn counts_subscribers_in_registry() {
-        let registry = SharedRegistry::new();
-        registry.add(Subscriber::all("stdout_subscriber"));
-        registry.record_topic("lob__btcusdt");
-        assert_eq!(registry.count_for_topic("lob__btcusdt"), 1);
     }
 }
