@@ -16,8 +16,6 @@ and forwards the normalized events to subscribers over a TCP socket using
 - Payload JSON augmented with the `exchange` field when missing
 - Built-in log subscriber (gated by `--data-out`) that connects locally
   and logs every topic to stdout with the `[type-exchange]` prefix tag
-- Periodic per-topic subscriber counts emitted as JSON, every
-  `--show-subscriber-count-secs` seconds (default `5`)
 - Async logging via `tracing` (no `println!`)
 - Configurable depth, level filtering, and resilience (exponential backoff + jitter)
 - Dry-run mode for local testing
@@ -54,7 +52,6 @@ empty prefix to receive every topic.
 | `--dry-run` | Do not start the NNG broker; log one line per item |
 | `--port <port>` | Override the NNG TCP port from `config.toml` |
 | `--data-out` | Also start the built-in log subscriber that prints every topic to stdout |
-| `--show-subscriber-count-secs <secs>` | Interval in seconds for per-topic subscriber-count JSON lines (default `5`) |
 | `--test-timeout-secs <secs>` | Exit automatically after this many seconds (`0` = no timeout; intended for tests/CI) |
 
 ## Configuration
@@ -109,14 +106,7 @@ All log lines include a prefix tag identifying the source:
 
 - `[lob-okx]:`, `[trade-okx]:`, ... — a received data item
 - `[stdout_subscriber]:` — the built-in log subscriber lifecycle
-- `[system]:` — broker, count reporter, timeouts and shutdown
-
-Example per-topic count output:
-
-```
-[system]: {"subscribers":1,"timestamp":1786036263543,"topic":"lob__btcusdt"}
-[system]: {"subscribers":1,"timestamp":1786036263543,"topic":"trade__btcusdt"}
-```
+- `[system]:` — broker, timeouts and shutdown
 
 ## Architecture
 
@@ -124,25 +114,22 @@ This app is a thin wrapper around `cryptomeria-ingest`. The ingestion
 library handles WebSocket connection management, snapshot-first
 synchronization, automatic reconnection, and data normalization. This
 binary loads the config, creates the stream, publishes to the NNG
-broker, and (optionally) runs the built-in log subscriber and the
-subscriber-count reporter.
+broker, and (optionally) runs the built-in log subscriber.
 
 Module layout (domain-first):
 
 - `src/config.rs` — TOML parsing, `AppConfig`/`SourceConfig`/`NngConfig`
 - `src/forward.rs` — pure helpers: topic construction, JSON payload
   building (with `exchange` augmentation), frame splitting, log prefix
-- `src/registry.rs` — in-process `SubscriberRegistry` for per-topic
-  subscriber counts (NNG PUB/SUB does not expose subscription state to
-  the publisher)
 - `src/broker.rs` — NNG `Pub0` socket + dedicated sender thread
 - `src/subscriber.rs` — built-in NNG `Sub0` log subscriber
-- `src/bin/marketdata.rs` — CLI, orchestration, reporting task, shutdown
+- `src/bin/marketdata.rs` — CLI, orchestration, shutdown
 
 See the architecture decision records:
 
 - `docs/adr/Core Architecture/ADR-001-...-using-cryptomeria-ingest.md`
 - `docs/adr/Core Architecture/ADR-002-...-replace-nats-with-nng-tcp-subscriber.md`
+- `docs/adr/Core Architecture/ADR-003-...-remove-subscriber-registry.md`
 
 ## License
 

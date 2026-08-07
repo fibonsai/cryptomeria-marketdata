@@ -1,5 +1,4 @@
 use crate::forward::{extract_exchange, split_frame};
-use crate::registry::{SharedRegistry, Subscriber};
 use anyhow::{Context, Result};
 use nng::options::protocol::pubsub::Subscribe;
 use nng::options::{Options, RecvTimeout};
@@ -10,21 +9,18 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const RECV_TIMEOUT_MS: u64 = 500;
-const SUBSCRIBER_ID: &str = "stdout_subscriber";
 
 /// The built-in log subscriber: connects to the local NNG TCP port, subscribes
 /// to every current and future topic and logs received messages to stdout with
 /// tracing. Only loaded when `--data-out` is passed.
 pub struct StdoutSubscriber {
     shutdown: Arc<AtomicBool>,
-    registry: SharedRegistry,
     handle: Option<JoinHandle<()>>,
 }
 
 impl StdoutSubscriber {
-    /// Connect to `tcp://127.0.0.1:{port}` and register the subscriber in the
-    /// shared registry so the service can report per-topic subscriber counts.
-    pub fn connect(port: u16, registry: SharedRegistry) -> Result<Self> {
+    /// Connect to `tcp://127.0.0.1:{port}` and subscribe to all topics.
+    pub fn connect(port: u16) -> Result<Self> {
         let socket = Socket::new(Protocol::Sub0).context("failed to create NNG sub socket")?;
         socket
             .set_opt::<Subscribe>(Vec::<u8>::new())
@@ -36,7 +32,6 @@ impl StdoutSubscriber {
             .dial(&format!("tcp://127.0.0.1:{port}"))
             .with_context(|| format!("failed to connect log subscriber to port {port}"))?;
 
-        registry.add(Subscriber::all(SUBSCRIBER_ID));
         tracing::info!(
             "[stdout_subscriber]: connected to tcp://127.0.0.1:{port}, subscribing to all topics"
         );
@@ -46,25 +41,22 @@ impl StdoutSubscriber {
             .name("stdout-subscriber".to_string())
             .spawn({
                 let shutdown = Arc::clone(&shutdown);
-                let registry = registry.clone();
-                move || receive_loop(socket, registry, shutdown)
+                move || receive_loop(socket, shutdown)
             })
             .context("failed to spawn log subscriber thread")?;
 
         Ok(Self {
             shutdown,
-            registry,
             handle: Some(handle),
         })
     }
 
-    /// Stop the receive loop and unregister from the subscriber registry.
+    /// Stop the receive loop.
     pub fn close(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
-        self.registry.remove(SUBSCRIBER_ID);
         tracing::info!("[stdout_subscriber]: shutting down");
     }
 }
@@ -75,7 +67,7 @@ impl Drop for StdoutSubscriber {
     }
 }
 
-fn receive_loop(socket: Socket, registry: SharedRegistry, shutdown: Arc<AtomicBool>) {
+fn receive_loop(socket: Socket, shutdown: Arc<AtomicBool>) {
     while !shutdown.load(Ordering::Relaxed) {
         match socket.recv() {
             Ok(message) => log_message(&message),
@@ -86,7 +78,6 @@ fn receive_loop(socket: Socket, registry: SharedRegistry, shutdown: Arc<AtomicBo
             }
         }
     }
-    registry.remove(SUBSCRIBER_ID);
 }
 
 fn log_message(message: &nng::Message) {

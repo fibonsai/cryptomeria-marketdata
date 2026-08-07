@@ -3,11 +3,9 @@ use clap::Parser;
 use criptomeria_marketdata::broker::Broker;
 use criptomeria_marketdata::config::parse_config;
 use criptomeria_marketdata::forward::{build_payload, topic_for};
-use criptomeria_marketdata::registry::SharedRegistry;
 use criptomeria_marketdata::subscriber::StdoutSubscriber;
 use cryptomeria_ingest as ingest;
 use futures_util::StreamExt;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
 #[command(
@@ -28,23 +26,10 @@ struct Cli {
     data_out: bool,
     #[arg(
         long,
-        default_value_t = 5,
-        help = "Interval in seconds to report subscriber counts per topic (JSON)"
-    )]
-    show_subscriber_count_secs: u64,
-    #[arg(
-        long,
         default_value_t = 0,
         help = "Exit automatically after this many seconds (0 = no timeout; for tests/CI)"
     )]
     test_timeout_secs: u64,
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 fn init_tracing() {
@@ -67,12 +52,11 @@ async fn main() -> Result<()> {
     }
     let source = app.source.to_data_source()?;
 
-    let registry = SharedRegistry::new();
     let broker = if cli.dry_run {
         tracing::info!("[system]: dry-run: NNG broker not started");
         None
     } else {
-        let broker = Broker::bind(app.nng.port, registry.clone())
+        let broker = Broker::bind(app.nng.port)
             .with_context(|| format!("failed to start NNG broker on port {}", app.nng.port))?;
         tracing::info!(
             "[system]: NNG broker listening on tcp://0.0.0.0:{}",
@@ -82,32 +66,12 @@ async fn main() -> Result<()> {
     };
 
     let subscriber = if cli.data_out {
-        let sub = StdoutSubscriber::connect(app.nng.port, registry.clone())
+        let sub = StdoutSubscriber::connect(app.nng.port)
             .with_context(|| format!("failed to start log subscriber on port {}", app.nng.port))?;
         Some(sub)
     } else {
         None
     };
-
-    if !cli.dry_run && cli.show_subscriber_count_secs > 0 {
-        let counts_registry = registry.clone();
-        let interval_secs = cli.show_subscriber_count_secs;
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-            loop {
-                ticker.tick().await;
-                let timestamp = now_millis();
-                for (topic, count) in counts_registry.snapshot_counts() {
-                    let json = serde_json::json!({
-                        "topic": topic,
-                        "subscribers": count,
-                        "timestamp": timestamp,
-                    });
-                    tracing::info!("[system]: {json}");
-                }
-            }
-        });
-    }
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     if cli.test_timeout_secs > 0 {

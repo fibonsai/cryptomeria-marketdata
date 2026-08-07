@@ -34,16 +34,15 @@ over a TCP socket using NNG pub/sub.
 - `cargo run --bin marketdata -- --data-out --test-timeout-secs 10` - Log all topics, auto-exit after 10s (CI-safe)
 
 ### Testing Details
-- Unit tests: Located alongside source in `src/config.rs`, `src/forward.rs`, `src/registry.rs`, `src/broker.rs`, `src/subscriber.rs`
+- Unit tests: Located alongside source in `src/config.rs`, `src/forward.rs`, `src/broker.rs`, `src/subscriber.rs`
 - Integration: An in-process NNG smoke test (`broker::tests`) binds an ephemeral port and verifies topic/payload delivery without external services
 
 **ALWAYS load `rust-coding` and `rust-tdd` skills before create or update tests.**
 
 ## Project Structure
-- `src/lib.rs` — Library exports (`config`, `forward`, `registry`, `broker`, `subscriber`)
+- `src/lib.rs` — Library exports (`config`, `forward`, `broker`, `subscriber`)
 - `src/config.rs` — Application configuration parsing/validation
 - `src/forward.rs` — Pure helpers: topic construction, JSON payload building, frame splitting, log prefix
-- `src/registry.rs` — In-process subscriber registry for per-topic counts
 - `src/broker.rs` — NNG PUB broker + dedicated sender thread
 - `src/subscriber.rs` — Built-in NNG SUB log subscriber
 - `src/bin/marketdata.rs` — CLI entry point
@@ -59,9 +58,7 @@ over a TCP socket using NNG pub/sub.
 - NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
 - Dynamic topics: `{type}__{instrument}` (e.g. `lob__btcusd`, `trade__btcusd`)
 - Payload JSON augmented with `exchange` field when missing
-- In-process `SubscriberRegistry` tracks per-topic subscriber counts (NNG PUB/SUB does not expose subscription state to publisher)
 - Built-in log subscriber (NNG SUB with empty prefix) logs to stdout with `tracing` when `--data-out` is passed
-- Periodic subscriber count JSON reporting at `--show-subscriber-count-secs` interval (default 5s)
 - `--test-timeout-secs` for CI/automated verification (0 = no timeout)
 - No task leaks: background tasks abort on shutdown signal
 - Pure functions for parsing/subscription building (testable without I/O)
