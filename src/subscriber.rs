@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use nng::options::protocol::pubsub::Subscribe;
 use nng::options::{Options, RecvTimeout};
-use nng::{Error, Protocol, Socket};
+use nng::{Error, Message, Protocol, Socket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -89,11 +89,13 @@ fn log_message(message: &nng::Message) {
 mod tests {
     use super::*;
     use crate::forward::frame_message;
+    use nng::Message;
 
     #[test]
     fn log_message_logs_raw_payload() {
         let framed = frame_message("lob__btcusdt", br#"{"exchange":"okx","ts":123}"#);
-        let message = nng::Message::from(framed);
+        let mut message = Message::new();
+        message.push_back(&framed);
         log_message(&message);
     }
 }
