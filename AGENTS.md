@@ -77,6 +77,7 @@ over a TCP socket using NNG pub/sub.
 - Supported exchanges: "okx", "kraken", "bitstamp"
 - Data kinds: "lob", "trade", "both", "lob|trade"
 - Resilience settings: initial_backoff_ms, max_backoff_ms, backoff_multiplier, jitter_ms, heartbeat_interval_secs, max_attempts
+- Instrument fallback: `alias` (optional) selects a per-exchange fallback mapping under `[source.fallback.<exchange>.<alias>]`; `fallback` maps exchange → alias → `ExchangeFallbackMapping` (base/quote/separator/case)
 - NNG port: default 14242 (configurable in `[nng]` section or `--port` CLI flag)
 
 ## Adding Tests
