@@ -53,11 +53,6 @@ pub fn build_payload(item: &MarketDataItem) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(item)?)
 }
 
-/// Log prefix for a data item: `[{kind}-{exchange}]` (e.g. `[lob-okx]`).
-pub fn log_prefix(item: &MarketDataItem, exchange: &str) -> String {
-    format!("[{}-{}]", ItemKind::from(item).as_str(), exchange)
-}
-
 const FRAME_SEPARATOR: u8 = b'\0';
 
 /// Frame a topic and payload into the wire bytes sent over NNG:
@@ -136,12 +131,6 @@ mod tests {
         let item = trade_item();
         let expected = serde_json::to_vec(&item).unwrap();
         assert_eq!(build_payload(&item).unwrap(), expected);
-    }
-
-    #[test]
-    fn formats_data_log_prefix() {
-        assert_eq!(log_prefix(&lob_item(), "okx"), "[lob-okx]");
-        assert_eq!(log_prefix(&trade_item(), "bitstamp"), "[trade-bitstamp]");
     }
 
     #[test]
