@@ -49,15 +49,9 @@ pub fn topic_for(instrument: &str, item: &MarketDataItem) -> String {
     )
 }
 
-/// Serialize an item to JSON, augmenting it with `exchange` when absent.
-pub fn build_payload(item: &MarketDataItem, exchange: &str) -> Result<Vec<u8>> {
-    let mut value = serde_json::to_value(item)?;
-    if let Some(obj) = value.as_object_mut()
-        && !obj.contains_key("exchange")
-    {
-        obj.insert("exchange".to_string(), Value::String(exchange.to_string()));
-    }
-    Ok(serde_json::to_vec(&value)?)
+/// Serialize an item to JSON exactly as received from cryptomeria-ingest.
+pub fn build_payload(item: &MarketDataItem) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(item)?)
 }
 
 /// Log prefix for a data item: `[{kind}-{exchange}]` (e.g. `[lob-okx]`).
@@ -86,13 +80,24 @@ pub fn split_frame(bytes: &[u8]) -> Option<(String, &[u8])> {
     Some((topic, &bytes[idx + 1..]))
 }
 
-/// Read the `exchange` field from an augmented JSON payload, if present.
+/// Read the `exchange` field from a forwarded payload. The item is
+/// externally tagged (`{"Trade":{...}}`), so the exchange is looked up at the
+/// top level when present and inside the single variant object otherwise.
 pub fn extract_exchange(payload: &[u8]) -> Option<String> {
-    serde_json::from_slice::<Value>(payload)
-        .ok()?
-        .get("exchange")?
-        .as_str()
+    let value = serde_json::from_slice::<Value>(payload).ok()?;
+    value
+        .get("exchange")
+        .and_then(Value::as_str)
         .map(|s| s.to_string())
+        .or_else(|| {
+            value
+                .as_object()?
+                .values()
+                .next()?
+                .get("exchange")?
+                .as_str()
+                .map(|s| s.to_string())
+        })
 }
 
 #[cfg(test)]
@@ -103,6 +108,7 @@ mod tests {
     fn lob_item() -> MarketDataItem {
         MarketDataItem::Lob(LobItem {
             ts: 123,
+            exchange: "okx".into(),
             bids: vec![],
             asks: vec![],
         })
@@ -111,6 +117,7 @@ mod tests {
     fn trade_item() -> MarketDataItem {
         MarketDataItem::Trade(TradeItem {
             ts: 456,
+            exchange: "okx".into(),
             price: 100.0,
             size: 1.0,
             side: "buy".into(),
@@ -146,25 +153,21 @@ mod tests {
     }
 
     #[test]
-    fn augments_payload_with_exchange_when_missing() {
-        let bytes = build_payload(&trade_item(), "okx").unwrap();
-        let json: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["exchange"], "okx");
+    fn payload_preserves_item_exactly_as_received() {
+        let item = trade_item();
+        let expected = serde_json::to_vec(&item).unwrap();
+        assert_eq!(build_payload(&item).unwrap(), expected);
     }
 
     #[test]
-    fn payload_keeps_existing_exchange_field() {
-        let item = MarketDataItem::Trade(TradeItem {
-            ts: 789,
-            price: 1.0,
-            size: 1.0,
-            side: "buy".into(),
-            trade_id: None,
-            seq_id: None,
-        });
-        let bytes = build_payload(&item, "okx").unwrap();
+    fn payload_carries_native_exchange_field() {
+        let bytes = build_payload(&trade_item()).unwrap();
         let json: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["exchange"], "okx");
+        let exchange = json
+            .get("trade")
+            .and_then(|v| v.get("exchange"))
+            .and_then(Value::as_str);
+        assert_eq!(exchange, Some("okx"));
     }
 
     #[test]
@@ -193,8 +196,8 @@ mod tests {
     }
 
     #[test]
-    fn extracts_exchange_from_augmented_payload() {
-        let payload = build_payload(&trade_item(), "okx").unwrap();
+    fn extracts_exchange_from_payload() {
+        let payload = build_payload(&trade_item()).unwrap();
         assert_eq!(extract_exchange(&payload).as_deref(), Some("okx"));
     }
 

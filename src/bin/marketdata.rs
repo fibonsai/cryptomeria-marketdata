@@ -40,7 +40,6 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    ingest::init();
     init_tracing();
     let cli = Cli::parse();
 
@@ -94,7 +93,7 @@ async fn main() -> Result<()> {
                     Some(Ok(item)) => {
                         if let Some(broker) = &broker {
                             let topic = topic_for(&app.source.instrument, &item);
-                            match build_payload(&item, &app.source.exchange) {
+                            match build_payload(&item) {
                                 Ok(payload) => {
                                     if let Err(e) = broker.publish(&topic, &payload) {
                                         tracing::error!("[system]: publish failed: {e}");
