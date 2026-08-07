@@ -1,6 +1,5 @@
 use anyhow::Result;
 use cryptomeria_ingest::MarketDataItem;
-use serde_json::Value;
 
 /// The kind of market data item: order book or trade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,26 +79,6 @@ pub fn split_frame(bytes: &[u8]) -> Option<(String, &[u8])> {
     Some((topic, &bytes[idx + 1..]))
 }
 
-/// Read the `exchange` field from a forwarded payload. The item is
-/// externally tagged (`{"Trade":{...}}`), so the exchange is looked up at the
-/// top level when present and inside the single variant object otherwise.
-pub fn extract_exchange(payload: &[u8]) -> Option<String> {
-    let value = serde_json::from_slice::<Value>(payload).ok()?;
-    value
-        .get("exchange")
-        .and_then(Value::as_str)
-        .map(|s| s.to_string())
-        .or_else(|| {
-            value
-                .as_object()?
-                .values()
-                .next()?
-                .get("exchange")?
-                .as_str()
-                .map(|s| s.to_string())
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,17 +139,6 @@ mod tests {
     }
 
     #[test]
-    fn payload_carries_native_exchange_field() {
-        let bytes = build_payload(&trade_item()).unwrap();
-        let json: Value = serde_json::from_slice(&bytes).unwrap();
-        let exchange = json
-            .get("trade")
-            .and_then(|v| v.get("exchange"))
-            .and_then(Value::as_str);
-        assert_eq!(exchange, Some("okx"));
-    }
-
-    #[test]
     fn formats_data_log_prefix() {
         assert_eq!(log_prefix(&lob_item(), "okx"), "[lob-okx]");
         assert_eq!(log_prefix(&trade_item(), "bitstamp"), "[trade-bitstamp]");
@@ -193,17 +161,5 @@ mod tests {
     #[test]
     fn split_frame_returns_none_without_separator() {
         assert!(split_frame(b"no separator here").is_none());
-    }
-
-    #[test]
-    fn extracts_exchange_from_payload() {
-        let payload = build_payload(&trade_item()).unwrap();
-        assert_eq!(extract_exchange(&payload).as_deref(), Some("okx"));
-    }
-
-    #[test]
-    fn extract_exchange_returns_none_when_absent() {
-        let payload = serde_json::to_vec(&serde_json::json!({"ts": 1})).unwrap();
-        assert_eq!(extract_exchange(&payload), None);
     }
 }

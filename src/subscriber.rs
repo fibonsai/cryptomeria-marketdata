@@ -1,4 +1,4 @@
-use crate::forward::{extract_exchange, split_frame};
+use crate::forward::split_frame;
 use anyhow::{Context, Result};
 use nng::options::protocol::pubsub::Subscribe;
 use nng::options::{Options, RecvTimeout};
@@ -16,11 +16,13 @@ const RECV_TIMEOUT_MS: u64 = 500;
 pub struct StdoutSubscriber {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    #[allow(dead_code)]
+    exchange: String,
 }
 
 impl StdoutSubscriber {
     /// Connect to `tcp://127.0.0.1:{port}` and subscribe to all topics.
-    pub fn connect(port: u16) -> Result<Self> {
+    pub fn connect(port: u16, exchange: &str) -> Result<Self> {
         let socket = Socket::new(Protocol::Sub0).context("failed to create NNG sub socket")?;
         socket
             .set_opt::<Subscribe>(Vec::<u8>::new())
@@ -37,17 +39,21 @@ impl StdoutSubscriber {
         );
 
         let shutdown = Arc::new(AtomicBool::new(false));
+        let exchange = exchange.to_string();
+        let exchange_clone = exchange.clone();
         let handle = thread::Builder::new()
             .name("stdout-subscriber".to_string())
             .spawn({
                 let shutdown = Arc::clone(&shutdown);
-                move || receive_loop(socket, shutdown)
+                let exchange = exchange_clone;
+                move || receive_loop(socket, shutdown, exchange)
             })
             .context("failed to spawn log subscriber thread")?;
 
         Ok(Self {
             shutdown,
             handle: Some(handle),
+            exchange,
         })
     }
 
@@ -67,10 +73,10 @@ impl Drop for StdoutSubscriber {
     }
 }
 
-fn receive_loop(socket: Socket, shutdown: Arc<AtomicBool>) {
+fn receive_loop(socket: Socket, shutdown: Arc<AtomicBool>, exchange: String) {
     while !shutdown.load(Ordering::Relaxed) {
         match socket.recv() {
-            Ok(message) => log_message(&message),
+            Ok(message) => log_message(&message, &exchange),
             Err(Error::TimedOut) => continue,
             Err(err) => {
                 tracing::warn!("[stdout_subscriber]: receive error: {err}");
@@ -80,14 +86,13 @@ fn receive_loop(socket: Socket, shutdown: Arc<AtomicBool>) {
     }
 }
 
-fn log_message(message: &nng::Message) {
+fn log_message(message: &nng::Message, exchange: &str) {
     let bytes = message.as_slice();
     let Some((topic, payload)) = split_frame(bytes) else {
         tracing::warn!("[stdout_subscriber]: received malformed frame, skipping");
         return;
     };
     let kind = topic.split("__").next().unwrap_or("data");
-    let exchange = extract_exchange(payload).unwrap_or_else(|| "unknown".to_string());
     tracing::info!("[{kind}-{exchange}]: {}", String::from_utf8_lossy(payload));
 }
 
@@ -98,10 +103,10 @@ mod tests {
 
     #[test]
     fn builds_log_prefix_from_topic_and_exchange() {
-        let framed = frame_message("lob__btcusdt", br#"{"ts":1,"exchange":"okx"}"#);
-        let (topic, payload) = split_frame(&framed).unwrap();
+        let framed = frame_message("lob__btcusdt", br#"{"ts":1}"#);
+        let (topic, _payload) = split_frame(&framed).unwrap();
         let kind = topic.split("__").next().unwrap();
-        let exchange = extract_exchange(payload).unwrap();
+        let exchange = "okx";
         assert_eq!(format!("[{kind}-{exchange}]"), "[lob-okx]");
     }
 }
