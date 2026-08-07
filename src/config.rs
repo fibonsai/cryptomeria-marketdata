@@ -1,5 +1,6 @@
-use cryptomeria_ingest::{DataKind, DataSourceConfig, ResilienceConfig};
+use cryptomeria_ingest::{DataKind, DataSourceConfig, ExchangeFallbackMapping, ResilienceConfig};
 use serde::Deserialize;
+use std::collections::HashMap;
 
 const DEFAULT_SNAPSHOT_DEPTH: usize = 400;
 const DEFAULT_NNG_PORT: u16 = 14242;
@@ -17,6 +18,10 @@ pub struct SourceConfig {
     pub exchange: String,
     pub region: String,
     pub instrument: String,
+    /// Optional alias used to select a per-exchange fallback mapping
+    /// (`fallback[exchange][alias]`). Defaults to the exchange-only rule.
+    #[serde(default)]
+    pub alias: Option<String>,
     /// One of "lob", "trade", "both", "lob|trade".
     pub data_kind: String,
     #[serde(default)]
@@ -27,6 +32,10 @@ pub struct SourceConfig {
     pub snapshot_depth: usize,
     #[serde(default)]
     pub resilience: ResilienceConfig,
+    /// Per-exchange fallback mappings, keyed by exchange name and then by
+    /// instrument alias. See `cryptomeria-ingest` README for details.
+    #[serde(default)]
+    pub fallback: HashMap<String, HashMap<String, ExchangeFallbackMapping>>,
 }
 
 /// NNG PUB/SUB broker settings (TCP transport).
@@ -97,10 +106,12 @@ impl SourceConfig {
             region: self.region.clone(),
             instrument: self.instrument.clone(),
             data_kind: self.data_kind()?,
+            alias: self.alias.clone(),
             max_level: self.max_level,
             max_level_pct: self.max_level_pct,
             snapshot_depth: self.snapshot_depth,
             resilience: self.resilience.clone(),
+            fallback: self.fallback.clone(),
         };
         data_source
             .validate()
@@ -112,6 +123,7 @@ impl SourceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cryptomeria_ingest::CaseFallback;
 
     const VALID_TOML: &str = r#"
 [source]
@@ -259,5 +271,75 @@ port = 14242
         let config = parse_config(&toml).unwrap();
         let err = config.source.to_data_source().unwrap_err();
         assert!(matches!(err, ConfigError::InvalidSource(_)));
+    }
+
+    #[test]
+    fn parses_alias_and_fallback_mapping() {
+        let toml = r#"
+[source]
+exchange = "okx"
+region = "global"
+instrument = "btc/usdt"
+alias = "btcusd"
+data_kind = "lob"
+
+[source.fallback.okx.btcusd]
+base_mappings = ["BTC", "XBT"]
+quote_mappings = ["USDT", "USD"]
+separator_mappings = ["-", "/"]
+case_fallback = "upper"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.source.alias.as_deref(), Some("btcusd"));
+        let mapping = config
+            .source
+            .fallback
+            .get("okx")
+            .and_then(|a| a.get("btcusd"))
+            .expect("fallback mapping should be present");
+        assert_eq!(mapping.base_mappings, vec!["BTC", "XBT"]);
+        assert_eq!(mapping.quote_mappings, vec!["USDT", "USD"]);
+        assert_eq!(mapping.separator_mappings, vec!["-", "/"]);
+        assert_eq!(mapping.case_fallback, CaseFallback::Upper);
+    }
+
+    #[test]
+    fn applies_defaults_for_alias_and_fallback_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        assert_eq!(config.source.alias, None);
+        assert!(config.source.fallback.is_empty());
+    }
+
+    #[test]
+    fn to_data_source_forwards_alias_and_fallback() {
+        let toml = r#"
+[source]
+exchange = "okx"
+region = "global"
+instrument = "btc/usdt"
+alias = "btcusd"
+data_kind = "lob"
+
+[source.fallback.okx.btcusd]
+base_mappings = ["BTC"]
+quote_mappings = ["USDT"]
+separator_mappings = ["-"]
+case_fallback = "upper"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.to_data_source().unwrap();
+        assert_eq!(source.alias.as_deref(), Some("btcusd"));
+        let mapping = source
+            .fallback
+            .get("okx")
+            .and_then(|a| a.get("btcusd"))
+            .expect("fallback should be forwarded");
+        assert_eq!(mapping.base_mappings, vec!["BTC"]);
     }
 }

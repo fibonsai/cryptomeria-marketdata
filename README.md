@@ -17,7 +17,7 @@ and forwards the normalized events to subscribers over a TCP socket using
 - Built-in log subscriber (gated by `--data-out`) that connects locally
   and logs every topic to stdout with the `[type-exchange]` prefix tag
 - Async logging via `tracing` (no `println!`)
-- Configurable depth, level filtering, and resilience (exponential backoff + jitter)
+- Configurable depth, level filtering, resilience (exponential backoff + jitter), and instrument fallback
 - Dry-run mode for local testing
 - Graceful shutdown on Ctrl+C, with `--test-timeout-secs` for CI
 
@@ -63,8 +63,10 @@ Edit `config.toml` (see the example file):
 exchange = "okx"           # okx | kraken | bitstamp
 region = "global"          # global | europe
 instrument = "BTC-USDT"    # exchange-native symbol
+# alias = "btcusd"         # optional: selects a per-exchange fallback mapping
 data_kind = "both"         # lob | trade | both | lob|trade
 max_level = 10             # optional: limit order book depth per side
+max_level_pct = 0.0        # optional: max % from best price (conflicts with max_level)
 snapshot_depth = 400       # depth for Bitstamp REST snapshot
 
 [source.resilience]
@@ -75,13 +77,20 @@ jitter_ms = 1000
 heartbeat_interval_secs = 0
 max_attempts = 0
 
+# Optional: instrument symbol fallback. See cryptomeria-ingest README.
+# [source.fallback.okx.btcusd]
+# base_mappings = ["BTC", "XBT"]
+# quote_mappings = ["USDT", "USD"]
+# separator_mappings = ["-", "/"]
+# case_fallback = "upper"
+
 [nng]
 port = 14242
 ```
 
 See the [cryptomeria-ingest documentation](https://github.com/fibonsai/cryptomeria-ingest)
-for details on `max_level_pct`, resilience settings, and exchange-specific
-instrument formats.
+for details on `max_level_pct`, resilience settings, exchange-specific instrument
+formats, and instrument validation/fallback via `alias` and `fallback`.
 
 ## Wire Format
 
