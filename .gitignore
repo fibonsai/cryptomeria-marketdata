@@ -63,5 +63,9 @@ cobertura.xml
 .worktrees/**
 .grepai/
 
+# Keep the CLI binary tracked (a global ~/.gitignore may ignore paths named "bin")
+!src/bin/
+!src/bin/**
+
 # Ignore TODO temp file
 TODO

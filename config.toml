@@ -15,7 +15,5 @@ jitter_ms = 1000
 heartbeat_interval_secs = 0
 max_attempts = 0
 
-[nats]
-url = "nats://localhost:4222"
-subject_lob = "marketdata.lob"
-subject_trade = "marketdata.trade"
+[nng]
+port = 14242

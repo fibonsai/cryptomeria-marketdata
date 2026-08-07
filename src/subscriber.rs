@@ -1,0 +1,116 @@
+use crate::forward::{extract_exchange, split_frame};
+use crate::registry::{SharedRegistry, Subscriber};
+use anyhow::{Context, Result};
+use nng::options::protocol::pubsub::Subscribe;
+use nng::options::{Options, RecvTimeout};
+use nng::{Error, Protocol, Socket};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+const RECV_TIMEOUT_MS: u64 = 500;
+const SUBSCRIBER_ID: &str = "stdout_subscriber";
+
+/// The built-in log subscriber: connects to the local NNG TCP port, subscribes
+/// to every current and future topic and logs received messages to stdout with
+/// tracing. Only loaded when `--data-out` is passed.
+pub struct StdoutSubscriber {
+    shutdown: Arc<AtomicBool>,
+    registry: SharedRegistry,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl StdoutSubscriber {
+    /// Connect to `tcp://127.0.0.1:{port}` and register the subscriber in the
+    /// shared registry so the service can report per-topic subscriber counts.
+    pub fn connect(port: u16, registry: SharedRegistry) -> Result<Self> {
+        let socket = Socket::new(Protocol::Sub0).context("failed to create NNG sub socket")?;
+        socket
+            .set_opt::<Subscribe>(Vec::<u8>::new())
+            .context("failed to subscribe to all topics")?;
+        socket
+            .set_opt::<RecvTimeout>(Some(Duration::from_millis(RECV_TIMEOUT_MS)))
+            .context("failed to set NNG recv timeout")?;
+        socket
+            .dial(&format!("tcp://127.0.0.1:{port}"))
+            .with_context(|| format!("failed to connect log subscriber to port {port}"))?;
+
+        registry.add(Subscriber::all(SUBSCRIBER_ID));
+        tracing::info!(
+            "[stdout_subscriber]: connected to tcp://127.0.0.1:{port}, subscribing to all topics"
+        );
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let handle = thread::Builder::new()
+            .name("stdout-subscriber".to_string())
+            .spawn({
+                let shutdown = Arc::clone(&shutdown);
+                let registry = registry.clone();
+                move || receive_loop(socket, registry, shutdown)
+            })
+            .context("failed to spawn log subscriber thread")?;
+
+        Ok(Self {
+            shutdown,
+            registry,
+            handle: Some(handle),
+        })
+    }
+
+    /// Stop the receive loop and unregister from the subscriber registry.
+    pub fn close(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        self.registry.remove(SUBSCRIBER_ID);
+        tracing::info!("[stdout_subscriber]: shutting down");
+    }
+}
+
+impl Drop for StdoutSubscriber {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn receive_loop(socket: Socket, registry: SharedRegistry, shutdown: Arc<AtomicBool>) {
+    while !shutdown.load(Ordering::Relaxed) {
+        match socket.recv() {
+            Ok(message) => log_message(&message),
+            Err(Error::TimedOut) => continue,
+            Err(err) => {
+                tracing::warn!("[stdout_subscriber]: receive error: {err}");
+                break;
+            }
+        }
+    }
+    registry.remove(SUBSCRIBER_ID);
+}
+
+fn log_message(message: &nng::Message) {
+    let bytes = message.as_slice();
+    let Some((topic, payload)) = split_frame(bytes) else {
+        tracing::warn!("[stdout_subscriber]: received malformed frame, skipping");
+        return;
+    };
+    let kind = topic.split("__").next().unwrap_or("data");
+    let exchange = extract_exchange(payload).unwrap_or_else(|| "unknown".to_string());
+    tracing::info!("[{kind}-{exchange}]: {}", String::from_utf8_lossy(payload));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forward::frame_message;
+
+    #[test]
+    fn builds_log_prefix_from_topic_and_exchange() {
+        let framed = frame_message("lob__btcusdt", br#"{"ts":1,"exchange":"okx"}"#);
+        let (topic, payload) = split_frame(&framed).unwrap();
+        let kind = topic.split("__").next().unwrap();
+        let exchange = extract_exchange(payload).unwrap();
+        assert_eq!(format!("[{kind}-{exchange}]"), "[lob-okx]");
+    }
+}
