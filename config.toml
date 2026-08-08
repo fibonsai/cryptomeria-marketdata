@@ -52,11 +52,34 @@ case_fallback = "upper"
 
 # Exchange-only fallback (used when `alias` is omitted or no alias matches):
 #
-# [source.okx.fallback.""]
-# base_mappings = ["BTC"]
-# quote_mappings = ["USDT"]
-# separator_mappings = ["-"]
-# case_fallback = "upper"
+  # [source.okx.fallback.""]
+  # base_mappings = ["BTC"]
+  # quote_mappings = ["USDT"]
+  # separator_mappings = ["-"]
+  # case_fallback = "upper"
+
+# When more than one exchange is configured, each runs in its own parallel
+# stream and publishes to the shared NNG broker. Topics are keyed by
+# `{type}__{instrument}` only (the exchange is NOT part of the topic), so use
+# distinct instruments per exchange to avoid collisions.
+#
+# Example: run OKX *and* Kraken in parallel by uncommenting the block below:
+#
+# [source.kraken]
+# region = "global"
+# instrument = "XBT/USD"
+# data_kind = "trade"
+# max_level = 3
+# max_level_pct = 0.0
+# snapshot_depth = 400
+#
+# [source.kraken.resilience]
+# initial_backoff_ms = 1000
+# max_backoff_ms = 60000
+# backoff_multiplier = 2.0
+# jitter_ms = 1000
+# heartbeat_interval_secs = 10
+# max_attempts = 0
 
 [nng]
 # TCP port for the NNG PUB broker
