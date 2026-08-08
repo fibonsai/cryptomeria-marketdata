@@ -49,7 +49,15 @@ async fn main() -> Result<()> {
     if let Some(port) = cli.port {
         app.nng.port = port;
     }
-    let source = app.source.to_data_source()?;
+    let (exchange, source_config) = app
+        .source
+        .iter()
+        .next()
+        .map(|(k, v)| (k.clone(), v))
+        .ok_or_else(|| {
+            anyhow::anyhow!("no [source.<exchange>] section found in config")
+        })?;
+    let source = source_config.to_data_source(&exchange)?;
 
     let broker = if cli.dry_run {
         tracing::info!("[system]: dry-run: NNG broker not started");
@@ -92,7 +100,7 @@ async fn main() -> Result<()> {
                 match item {
                     Some(Ok(item)) => {
                         if let Some(broker) = &broker {
-                            let topic = topic_for(&app.source.instrument, &item);
+                            let topic = topic_for(&source_config.instrument, &item);
                             match build_payload(&item) {
                                 Ok(payload) => {
                                     if let Err(e) = broker.publish(&topic, &payload) {
