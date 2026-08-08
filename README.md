@@ -59,8 +59,8 @@ empty prefix to receive every topic.
 Edit `config.toml` (see the example file):
 
 ```toml
-[source]
-exchange = "okx"           # okx | kraken | bitstamp
+[source.okx]
+exchange = "okx"           # subkey names this exchange; omit the field below
 region = "global"          # global | europe
 instrument = "BTC-USDT"    # exchange-native symbol
 # alias = "btcusd"         # optional: selects a per-exchange fallback mapping
@@ -69,7 +69,7 @@ max_level = 10             # optional: limit order book depth per side
 max_level_pct = 0.0        # optional: max % from best price (conflicts with max_level)
 snapshot_depth = 400       # depth for Bitstamp REST snapshot
 
-[source.resilience]
+[source.okx.resilience]
 initial_backoff_ms = 1000
 max_backoff_ms = 60000
 backoff_multiplier = 2.0
@@ -78,7 +78,7 @@ heartbeat_interval_secs = 0
 max_attempts = 0
 
 # Optional: instrument symbol fallback. See cryptomeria-ingest README.
-# [source.fallback.okx.btcusd]
+# [source.okx.fallback.btcusd]
 # base_mappings = ["BTC", "XBT"]
 # quote_mappings = ["USDT", "USD"]
 # separator_mappings = ["-", "/"]

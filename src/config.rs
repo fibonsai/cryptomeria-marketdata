@@ -8,18 +8,33 @@ const DEFAULT_NNG_PORT: u16 = 14242;
 /// Top-level application configuration, loaded from a TOML file.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
-    pub source: SourceConfig,
+    pub source: HashMap<String, SourceConfig>,
     pub nng: NngConfig,
+}
+
+impl AppConfig {
+    /// Return the single exchange `SourceConfig`.
+    ///
+    /// Returns an error if the config defines zero or more than one exchange.
+    pub fn exchange_source(&self) -> Result<&SourceConfig, ConfigError> {
+        if self.source.len() != 1 {
+            return Err(ConfigError::InvalidSource(format!(
+                "expected exactly one [source.<exchange>] section, found {}",
+                self.source.len()
+            )));
+        }
+        Ok(self.source.values().next().unwrap())
+    }
 }
 
 /// Exchange WebSocket subscription settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SourceConfig {
-    pub exchange: String,
     pub region: String,
     pub instrument: String,
     /// Optional alias used to select a per-exchange fallback mapping
-    /// (`fallback[exchange][alias]`). Defaults to the exchange-only rule.
+    /// under `[source.<exchange>.fallback.<alias>]`. Defaults to the
+    /// exchange-only rule.
     #[serde(default)]
     pub alias: Option<String>,
     /// One of "lob", "trade", "both", "lob|trade".
@@ -32,10 +47,10 @@ pub struct SourceConfig {
     pub snapshot_depth: usize,
     #[serde(default)]
     pub resilience: ResilienceConfig,
-    /// Per-exchange fallback mappings, keyed by exchange name and then by
-    /// instrument alias. See `cryptomeria-ingest` README for details.
+    /// Per-alias fallback mappings for this exchange, keyed by instrument
+    /// alias. See `cryptomeria-ingest` README for details.
     #[serde(default)]
-    pub fallback: HashMap<String, HashMap<String, ExchangeFallbackMapping>>,
+    pub fallback: HashMap<String, ExchangeFallbackMapping>,
 }
 
 /// NNG PUB/SUB broker settings (TCP transport).
@@ -100,9 +115,11 @@ impl SourceConfig {
     }
 
     /// Convert to the ingest `DataSourceConfig`, validating exchange/region.
-    pub fn to_data_source(&self) -> Result<DataSourceConfig, ConfigError> {
+    ///
+    /// `exchange` is the key from the parent `[source.<exchange>]` section.
+    pub fn to_data_source(&self, exchange: &str) -> Result<DataSourceConfig, ConfigError> {
         let data_source = DataSourceConfig {
-            exchange: self.exchange.clone(),
+            exchange: exchange.to_string(),
             region: self.region.clone(),
             instrument: self.instrument.clone(),
             data_kind: self.data_kind()?,
@@ -111,7 +128,7 @@ impl SourceConfig {
             max_level_pct: self.max_level_pct,
             snapshot_depth: self.snapshot_depth,
             resilience: self.resilience.clone(),
-            fallback: self.fallback.clone(),
+            fallback: HashMap::from([(exchange.to_string(), self.fallback.clone())]),
         };
         data_source
             .validate()
@@ -126,8 +143,7 @@ mod tests {
     use cryptomeria_ingest::CaseFallback;
 
     const VALID_TOML: &str = r#"
-[source]
-exchange = "okx"
+[source.okx]
 region = "global"
 instrument = "BTC-USDT"
 data_kind = "both"
@@ -139,26 +155,26 @@ port = 14242
     #[test]
     fn parses_valid_config() {
         let config = parse_config(VALID_TOML).unwrap();
-        assert_eq!(config.source.exchange, "okx");
-        assert_eq!(config.source.region, "global");
-        assert_eq!(config.source.instrument, "BTC-USDT");
-        assert_eq!(config.source.data_kind, "both");
+        let source = config.source.get("okx").expect("okx source should be present");
+        assert_eq!(source.region, "global");
+        assert_eq!(source.instrument, "BTC-USDT");
+        assert_eq!(source.data_kind, "both");
         assert_eq!(config.nng.port, 14242);
     }
 
     #[test]
     fn applies_defaults_for_optional_fields() {
         let config = parse_config(VALID_TOML).unwrap();
-        assert_eq!(config.source.snapshot_depth, DEFAULT_SNAPSHOT_DEPTH);
-        assert_eq!(config.source.max_level, None);
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.snapshot_depth, DEFAULT_SNAPSHOT_DEPTH);
+        assert_eq!(source.max_level, None);
         assert_eq!(config.nng.port, DEFAULT_NNG_PORT);
     }
 
     #[test]
     fn nng_port_defaults_to_14242_when_omitted() {
         let toml = r#"
-[source]
-exchange = "okx"
+[source.okx]
 region = "global"
 instrument = "BTC-USDT"
 data_kind = "lob"
@@ -172,8 +188,7 @@ data_kind = "lob"
     #[test]
     fn parses_custom_nng_port() {
         let toml = r#"
-[source]
-exchange = "okx"
+[source.okx]
 region = "global"
 instrument = "BTC-USDT"
 data_kind = "lob"
@@ -186,14 +201,13 @@ port = 9999
     }
 
     #[test]
-    fn parses_resilience_section() {
+    fn parses_resilience_section_under_exchange_subkey() {
         let toml = r#"
-[source]
-exchange = "okx"
+[source.okx]
 region = "global"
 instrument = "BTC-USDT"
 data_kind = "lob"
-[source.resilience]
+[source.okx.resilience]
 initial_backoff_ms = 500
 max_backoff_ms = 5000
 backoff_multiplier = 2.0
@@ -203,9 +217,10 @@ jitter_ms = 100
 port = 14242
 "#;
         let config = parse_config(toml).unwrap();
-        assert_eq!(config.source.resilience.initial_backoff_ms, 500);
-        assert_eq!(config.source.resilience.max_backoff_ms, 5000);
-        assert_eq!(config.source.resilience.max_attempts, None);
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.resilience.initial_backoff_ms, 500);
+        assert_eq!(source.resilience.max_backoff_ms, 5000);
+        assert_eq!(source.resilience.max_attempts, None);
     }
 
     #[test]
@@ -259,31 +274,40 @@ port = 14242
     #[test]
     fn converts_to_valid_data_source() {
         let config = parse_config(VALID_TOML).unwrap();
-        let source = config.source.to_data_source().unwrap();
-        assert_eq!(source.exchange, "okx");
-        assert!(source.data_kind.contains(DataKind::LOB));
-        assert!(source.data_kind.contains(DataKind::TRADE));
+        let source = config.exchange_source().unwrap();
+        let data_source = source.to_data_source("okx").unwrap();
+        assert_eq!(data_source.exchange, "okx");
+        assert!(data_source.data_kind.contains(DataKind::LOB));
+        assert!(data_source.data_kind.contains(DataKind::TRADE));
     }
 
     #[test]
     fn rejects_unknown_exchange_on_conversion() {
-        let toml = VALID_TOML.replace("\"okx\"", "\"binance\"");
-        let config = parse_config(&toml).unwrap();
-        let err = config.source.to_data_source().unwrap_err();
+        let toml = r#"
+[source.binance]
+region = "global"
+instrument = "BTCUSDT"
+data_kind = "lob"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("binance").unwrap();
+        let err = source.to_data_source("binance").unwrap_err();
         assert!(matches!(err, ConfigError::InvalidSource(_)));
     }
 
     #[test]
-    fn parses_alias_and_fallback_mapping() {
+    fn parses_alias_and_fallback_mapping_under_exchange_subkey() {
         let toml = r#"
-[source]
-exchange = "okx"
+[source.okx]
 region = "global"
 instrument = "btc/usdt"
 alias = "btcusd"
 data_kind = "lob"
 
-[source.fallback.okx.btcusd]
+[source.okx.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]
 quote_mappings = ["USDT", "USD"]
 separator_mappings = ["-", "/"]
@@ -293,12 +317,11 @@ case_fallback = "upper"
 port = 14242
 "#;
         let config = parse_config(toml).unwrap();
-        assert_eq!(config.source.alias.as_deref(), Some("btcusd"));
-        let mapping = config
-            .source
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.alias.as_deref(), Some("btcusd"));
+        let mapping = source
             .fallback
-            .get("okx")
-            .and_then(|a| a.get("btcusd"))
+            .get("btcusd")
             .expect("fallback mapping should be present");
         assert_eq!(mapping.base_mappings, vec!["BTC", "XBT"]);
         assert_eq!(mapping.quote_mappings, vec!["USDT", "USD"]);
@@ -309,21 +332,21 @@ port = 14242
     #[test]
     fn applies_defaults_for_alias_and_fallback_when_omitted() {
         let config = parse_config(VALID_TOML).unwrap();
-        assert_eq!(config.source.alias, None);
-        assert!(config.source.fallback.is_empty());
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.alias, None);
+        assert!(source.fallback.is_empty());
     }
 
     #[test]
     fn to_data_source_forwards_alias_and_fallback() {
         let toml = r#"
-[source]
-exchange = "okx"
+[source.okx]
 region = "global"
 instrument = "btc/usdt"
 alias = "btcusd"
 data_kind = "lob"
 
-[source.fallback.okx.btcusd]
+[source.okx.fallback.btcusd]
 base_mappings = ["BTC"]
 quote_mappings = ["USDT"]
 separator_mappings = ["-"]
@@ -333,13 +356,53 @@ case_fallback = "upper"
 port = 14242
 "#;
         let config = parse_config(toml).unwrap();
-        let source = config.source.to_data_source().unwrap();
-        assert_eq!(source.alias.as_deref(), Some("btcusd"));
-        let mapping = source
+        let source = config.exchange_source().unwrap();
+        let data_source = source.to_data_source("okx").unwrap();
+        assert_eq!(data_source.alias.as_deref(), Some("btcusd"));
+        let mapping = data_source
             .fallback
             .get("okx")
             .and_then(|a| a.get("btcusd"))
             .expect("fallback should be forwarded");
         assert_eq!(mapping.base_mappings, vec!["BTC"]);
+    }
+
+    #[test]
+    fn rejects_config_with_multiple_exchanges() {
+        let toml = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+
+[source.kraken]
+region = "global"
+instrument = "XBT/USD"
+data_kind = "trade"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let result = config.exchange_source();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_config_with_no_exchanges() {
+        let toml = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+
+[nng]
+port = 14242
+"#;
+        // Remove everything under [source] by parsing then clearing.
+        let mut config = parse_config(toml).unwrap();
+        config.source.clear();
+        let result = config.exchange_source();
+        assert!(result.is_err());
     }
 }

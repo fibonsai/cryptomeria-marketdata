@@ -1,16 +1,14 @@
 # cryptomeria-marketdata configuration
 # See cryptomeria-ingest README for fallback/alias details.
 
-[source]
-# Exchange to subscribe to: "okx", "kraken", or "bitstamp"
-exchange = "okx"
+[source.okx]
 # Region: "global" or "europe" (affects WS/REST endpoints)
 region = "global"
 # Instrument symbol in exchange-native format
 #   OKX:      "BTC-USDT",  Kraken: "XBT/USD",  Bitstamp: "BTC/USD"
 instrument = "alias"
 # Optional alias used to select a per-exchange fallback mapping
-# (`[source.fallback.<exchange>.<alias>]`). Only needed when the
+# under `[source.okx.fallback.<alias>]`. Only needed when the
 # primary instrument symbol is not recognized by the exchange.
 alias = "btcusd"
 # Data to subscribe to: "lob", "trade", "both", or "lob|trade"
@@ -22,7 +20,7 @@ max_level_pct = 0.0
 # Depth for REST snapshot (used by Bitstamp)
 snapshot_depth = 400
 
-[source.resilience]
+[source.okx.resilience]
 # Initial backoff in milliseconds
 initial_backoff_ms = 1000
 # Maximum backoff between reconnect attempts
@@ -36,14 +34,14 @@ heartbeat_interval_secs = 0
 # Max reconnect attempts (0 = unlimited)
 max_attempts = 0
 
-# [source.fallback]
+# [source.okx.fallback]
 # Per-exchange fallback mappings for auto-resolving instrument symbol variants.
-# The structure is: fallback[exchange][alias] -> ExchangeFallbackMapping
+# The structure is: within source.okx, fallback is keyed by instrument alias.
 # See the cryptomeria-ingest README "Instrument Validation and Fallback" section.
 #
 # Uncomment and tune the block below to enable symbol fallback for OKX:
 #
-[source.fallback.okx.btcusd]
+[source.okx.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]
 quote_mappings = ["USDT", "USD"]
 separator_mappings = ["-", "/"]
@@ -54,7 +52,7 @@ case_fallback = "upper"
 
 # Exchange-only fallback (used when `alias` is omitted or no alias matches):
 #
-# [source.fallback.okx.""]
+# [source.okx.fallback.""]
 # base_mappings = ["BTC"]
 # quote_mappings = ["USDT"]
 # separator_mappings = ["-"]
