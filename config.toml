@@ -8,11 +8,11 @@ exchange = "okx"
 region = "global"
 # Instrument symbol in exchange-native format
 #   OKX:      "BTC-USDT",  Kraken: "XBT/USD",  Bitstamp: "BTC/USD"
-instrument = "BTC-USDT"
+instrument = "alias"
 # Optional alias used to select a per-exchange fallback mapping
 # (`[source.fallback.<exchange>.<alias>]`). Only needed when the
 # primary instrument symbol is not recognized by the exchange.
-# alias = "btcusd"
+alias = "btcusd"
 # Data to subscribe to: "lob", "trade", "both", or "lob|trade"
 data_kind = "both"
 # Max number of price levels per side (None = no limit)
@@ -43,11 +43,11 @@ max_attempts = 0
 #
 # Uncomment and tune the block below to enable symbol fallback for OKX:
 #
-# [source.fallback.okx.btcusd]
-# base_mappings = ["BTC", "XBT"]
-# quote_mappings = ["USDT", "USD"]
-# separator_mappings = ["-", "/"]
-# case_fallback = "upper"
+[source.fallback.okx.btcusd]
+base_mappings = ["BTC", "XBT"]
+quote_mappings = ["USDT", "USD"]
+separator_mappings = ["-", "/"]
+case_fallback = "upper"
 #
 # Example: instrument "btc/usdt" first tries "BTC/USDT", then
 # "BTC-USDT", "BTC/USD", "XBT-USDT", etc. until one is accepted by OKX.
