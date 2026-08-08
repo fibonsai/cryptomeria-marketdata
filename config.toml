@@ -16,7 +16,7 @@ instrument = "BTC-USDT"
 # Data to subscribe to: "lob", "trade", "both", or "lob|trade"
 data_kind = "both"
 # Max number of price levels per side (None = no limit)
-max_level = 10
+max_level = 3
 # Max percentage from best price (0.0 = no limit; conflicts with max_level)
 max_level_pct = 0.0
 # Depth for REST snapshot (used by Bitstamp)
