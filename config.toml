@@ -63,23 +63,58 @@ case_fallback = "upper"
 # `{type}__{instrument}` only (the exchange is NOT part of the topic), so use
 # distinct instruments per exchange to avoid collisions.
 #
-# Example: run OKX *and* Kraken in parallel by uncommenting the block below:
-#
-# [source.kraken]
-# region = "global"
-# instrument = "XBT/USD"
-# data_kind = "trade"
-# max_level = 3
-# max_level_pct = 0.0
-# snapshot_depth = 400
-#
-# [source.kraken.resilience]
-# initial_backoff_ms = 1000
-# max_backoff_ms = 60000
-# backoff_multiplier = 2.0
-# jitter_ms = 1000
-# heartbeat_interval_secs = 10
-# max_attempts = 0
+
+# Kraken
+
+[source.kraken]
+region = "global"
+instrument = "ALIAS"
+alias = "btcusd"
+data_kind = "both"
+max_level = 3
+max_level_pct = 0.0
+snapshot_depth = 400
+
+[source.kraken.resilience]
+initial_backoff_ms = 1000
+max_backoff_ms = 60000
+backoff_multiplier = 2.0
+jitter_ms = 1000
+heartbeat_interval_secs = 10
+max_attempts = 0
+
+[source.kraken.fallback.btcusd]
+base_mappings = ["BTC", "XBT"]
+quote_mappings = ["USDT", "USDC", "USD"]
+separator_mappings = ["-", "/", ""]
+case_fallback = "upper"
+
+# Bitstamp
+
+[source.bitstamp]
+region = "global"
+instrument = "ALIAS"
+alias = "btcusd"
+data_kind = "both"
+max_level = 3
+max_level_pct = 0.0
+snapshot_depth = 400
+
+[source.bitstamp.resilience]
+initial_backoff_ms = 1000
+max_backoff_ms = 60000
+backoff_multiplier = 2.0
+jitter_ms = 1000
+heartbeat_interval_secs = 10
+max_attempts = 0
+
+[source.bitstamp.fallback.btcusd]
+base_mappings = ["BTC", "XBT"]
+quote_mappings = ["USDT", "USDC", "USD"]
+separator_mappings = ["-", "/", ""]
+case_fallback = "lower"
+
+
 
 [nng]
 # TCP port for the NNG PUB broker
