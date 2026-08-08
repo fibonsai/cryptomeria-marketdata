@@ -13,17 +13,39 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Return the single exchange `SourceConfig`.
+    /// Return every configured exchange source, sorted by exchange id for
+    /// deterministic ordering.
     ///
-    /// Returns an error if the config defines zero or more than one exchange.
-    pub fn exchange_source(&self) -> Result<&SourceConfig, ConfigError> {
-        if self.source.len() != 1 {
-            return Err(ConfigError::InvalidSource(format!(
-                "expected exactly one [source.<exchange>] section, found {}",
-                self.source.len()
-            )));
+    /// Unlike the previous single-exchange helper, this supports running
+    /// multiple exchanges in parallel. Returns an error only when no exchange
+    /// is configured at all.
+    pub fn exchange_sources(&self) -> Result<Vec<(&String, &SourceConfig)>, ConfigError> {
+        if self.source.is_empty() {
+            return Err(ConfigError::InvalidSource(
+                "no [source.<exchange>] section found in config".into(),
+            ));
         }
-        Ok(self.source.values().next().unwrap())
+        let mut entries: Vec<(&String, &SourceConfig)> = self.source.iter().collect();
+        entries.sort_by_key(|(exchange, _)| *exchange);
+        Ok(entries)
+    }
+
+    /// Build a validated `DataSourceConfig` for every configured exchange.
+    ///
+    /// Returns `(exchange, instrument, data_source)` tuples sorted by exchange
+    /// id. Validation is local (exchange/region/kind checks only); instrument
+    /// resolution against each exchange still happens inside `ingest::stream`.
+    /// This lets the caller fail fast on bad configs before binding the broker.
+    pub fn validated_sources(
+        &self,
+    ) -> Result<Vec<(String, String, DataSourceConfig)>, ConfigError> {
+        self.exchange_sources()?
+            .into_iter()
+            .map(|(exchange, source)| {
+                let data_source = source.to_data_source(exchange)?;
+                Ok((exchange.clone(), source.instrument.clone(), data_source))
+            })
+            .collect()
     }
 }
 
@@ -152,10 +174,28 @@ data_kind = "both"
 port = 14242
 "#;
 
+    const MULTI_EXCHANGE_TOML: &str = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+
+[source.kraken]
+region = "global"
+instrument = "XBT/USD"
+data_kind = "trade"
+
+[nng]
+port = 14242
+"#;
+
     #[test]
     fn parses_valid_config() {
         let config = parse_config(VALID_TOML).unwrap();
-        let source = config.source.get("okx").expect("okx source should be present");
+        let source = config
+            .source
+            .get("okx")
+            .expect("okx source should be present");
         assert_eq!(source.region, "global");
         assert_eq!(source.instrument, "BTC-USDT");
         assert_eq!(source.data_kind, "both");
@@ -274,7 +314,13 @@ port = 14242
     #[test]
     fn converts_to_valid_data_source() {
         let config = parse_config(VALID_TOML).unwrap();
-        let source = config.exchange_source().unwrap();
+        let source = config
+            .exchange_sources()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .1;
         let data_source = source.to_data_source("okx").unwrap();
         assert_eq!(data_source.exchange, "okx");
         assert!(data_source.data_kind.contains(DataKind::LOB));
@@ -356,7 +402,13 @@ case_fallback = "upper"
 port = 14242
 "#;
         let config = parse_config(toml).unwrap();
-        let source = config.exchange_source().unwrap();
+        let source = config
+            .exchange_sources()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .1;
         let data_source = source.to_data_source("okx").unwrap();
         assert_eq!(data_source.alias.as_deref(), Some("btcusd"));
         let mapping = data_source
@@ -368,41 +420,54 @@ port = 14242
     }
 
     #[test]
-    fn rejects_config_with_multiple_exchanges() {
-        let toml = r#"
-[source.okx]
-region = "global"
-instrument = "BTC-USDT"
-data_kind = "lob"
+    fn exchange_sources_returns_all_exchanges_sorted_alphabetically() {
+        let config = parse_config(MULTI_EXCHANGE_TOML).unwrap();
+        let sources = config.exchange_sources().unwrap();
+        let exchanges: Vec<&str> = sources.iter().map(|(e, _)| e.as_str()).collect();
+        assert_eq!(exchanges, vec!["kraken", "okx"]);
+        assert_eq!(sources.len(), 2);
+    }
 
-[source.kraken]
+    #[test]
+    fn exchange_sources_errors_when_no_exchanges() {
+        let mut config = parse_config(VALID_TOML).unwrap();
+        config.source.clear();
+        let result = config.exchange_sources();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validated_sources_builds_one_data_source_per_exchange() {
+        let config = parse_config(MULTI_EXCHANGE_TOML).unwrap();
+        let sources = config.validated_sources().unwrap();
+        assert_eq!(sources.len(), 2);
+        let exchanges: Vec<&str> = sources.iter().map(|(e, _, _)| e.as_str()).collect();
+        assert_eq!(exchanges, vec!["kraken", "okx"]);
+        let kraken = sources
+            .iter()
+            .find(|(e, _, _)| *e == "kraken")
+            .expect("kraken should be present");
+        assert_eq!(kraken.1, "XBT/USD");
+        let okx = sources
+            .iter()
+            .find(|(e, _, _)| *e == "okx")
+            .expect("okx should be present");
+        assert_eq!(okx.1, "BTC-USDT");
+    }
+
+    #[test]
+    fn validated_sources_errors_on_unknown_exchange() {
+        let toml = r#"
+[source.binance]
 region = "global"
-instrument = "XBT/USD"
-data_kind = "trade"
+instrument = "BTCUSDT"
+data_kind = "lob"
 
 [nng]
 port = 14242
 "#;
         let config = parse_config(toml).unwrap();
-        let result = config.exchange_source();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn rejects_config_with_no_exchanges() {
-        let toml = r#"
-[source.okx]
-region = "global"
-instrument = "BTC-USDT"
-data_kind = "lob"
-
-[nng]
-port = 14242
-"#;
-        // Remove everything under [source] by parsing then clearing.
-        let mut config = parse_config(toml).unwrap();
-        config.source.clear();
-        let result = config.exchange_source();
+        let result = config.validated_sources();
         assert!(result.is_err());
     }
 }

@@ -2,6 +2,7 @@ use crate::forward::frame_message;
 use anyhow::{Context, Result, anyhow};
 use nng::options::{Options, SendTimeout};
 use nng::{Message, Protocol, Socket};
+use std::sync::Mutex;
 use std::sync::mpsc::{self, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -12,10 +13,12 @@ const SEND_TIMEOUT_MS: u64 = 1000;
 /// The NNG PUB socket serving dynamic `type__instrument` topics over TCP.
 ///
 /// Publishing is queued to a dedicated sender thread so the async caller never
-/// blocks on a slow subscriber.
+/// blocks on a slow subscriber. The struct is `Sync` (the join handle is
+/// mutex-guarded) so a single `Broker` can be shared across concurrent tasks via
+/// `Arc<Broker>`; `publish` takes only `&self` and never blocks.
 pub struct Broker {
     sender: Option<SyncSender<Vec<u8>>>,
-    handle: Option<JoinHandle<()>>,
+    handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Broker {
@@ -37,7 +40,7 @@ impl Broker {
 
         Ok(Self {
             sender: Some(sender),
-            handle: Some(handle),
+            handle: Mutex::new(Some(handle)),
         })
     }
 
@@ -62,7 +65,7 @@ impl Broker {
     /// Stop the sender thread and drop the socket.
     pub fn close(&mut self) {
         self.sender.take();
-        if let Some(handle) = self.handle.take() {
+        if let Some(handle) = self.handle.lock().unwrap().take() {
             let _ = handle.join();
         }
     }

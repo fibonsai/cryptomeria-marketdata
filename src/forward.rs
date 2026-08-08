@@ -40,6 +40,11 @@ pub fn normalize_instrument(instrument: &str) -> String {
 }
 
 /// Build the dynamic topic for an item: `{kind}__{instrument}` (e.g. `lob__btcusdt`).
+///
+/// The topic does **not** include the exchange. When several exchanges are run
+/// in parallel against the same instrument and kind the topics collide (last
+/// writer wins); operators must use distinct instruments per exchange to keep
+/// streams separate.
 pub fn topic_for(instrument: &str, item: &MarketDataItem) -> String {
     format!(
         "{}__{}",

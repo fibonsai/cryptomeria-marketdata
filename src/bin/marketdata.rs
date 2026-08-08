@@ -6,6 +6,9 @@ use criptomeria_marketdata::forward::{build_payload, topic_for};
 use criptomeria_marketdata::subscriber::StdoutSubscriber;
 use cryptomeria_ingest as ingest;
 use futures_util::StreamExt;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::task::JoinSet;
 
 #[derive(Parser)]
 #[command(
@@ -38,6 +41,56 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
+/// Drain a single exchange stream, publishing each item under
+/// `{type}__{instrument}` to the shared broker. Runs as its own tokio task so
+/// several exchanges run in parallel.
+async fn run_exchange(
+    exchange: String,
+    instrument: String,
+    source: ingest::DataSourceConfig,
+    broker: Option<Arc<Broker>>,
+) {
+    tracing::info!("[{exchange}]: starting stream");
+
+    let mut stream = match ingest::stream(source).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            tracing::error!("[{exchange}]: failed to create stream: {e}");
+            return;
+        }
+    };
+
+    loop {
+        match stream.next().await {
+            Some(Ok(item)) => {
+                let topic = topic_for(&instrument, &item);
+                match build_payload(&item) {
+                    Ok(payload) => {
+                        if let Some(broker) = &broker {
+                            if let Err(e) = broker.publish(&topic, &payload) {
+                                tracing::error!("[{exchange}]: publish failed: {e}");
+                            }
+                        } else {
+                            tracing::info!("[{exchange}]: dry-run: skipped forwarding");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("[{exchange}]: payload encoding failed: {e}");
+                    }
+                }
+            }
+            Some(Err(e)) => {
+                tracing::error!("[{exchange}]: stream error: {e}");
+                break;
+            }
+            None => {
+                tracing::info!("[{exchange}]: stream ended");
+                break;
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
@@ -49,15 +102,13 @@ async fn main() -> Result<()> {
     if let Some(port) = cli.port {
         app.nng.port = port;
     }
-    let (exchange, source_config) = app
-        .source
-        .iter()
-        .next()
-        .map(|(k, v)| (k.clone(), v))
-        .ok_or_else(|| {
-            anyhow::anyhow!("no [source.<exchange>] section found in config")
-        })?;
-    let source = source_config.to_data_source(&exchange)?;
+
+    // Build and validate every configured exchange up front so a bad config
+    // fails before the broker binds. Each exchange gets its own independent
+    // stream, so they run fully in parallel.
+    let sources = app
+        .validated_sources()
+        .with_context(|| "no [source.<exchange>] section found in config")?;
 
     let broker = if cli.dry_run {
         tracing::info!("[system]: dry-run: NNG broker not started");
@@ -69,7 +120,7 @@ async fn main() -> Result<()> {
             "[system]: NNG broker listening on tcp://0.0.0.0:{}",
             app.nng.port
         );
-        Some(broker)
+        Some(Arc::new(broker))
     };
 
     let subscriber = if cli.data_out {
@@ -80,64 +131,79 @@ async fn main() -> Result<()> {
         None
     };
 
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    // Shared shutdown trigger: the test-timeout watcher and the Ctrl+C watcher
+    // both notify `shutdown`. The main loop drains exchange tasks until a
+    // shutdown signal arrives or every source has ended on its own.
+    let shutdown = Arc::new(tokio::sync::Notify::new());
+
     if cli.test_timeout_secs > 0 {
-        let tx = shutdown_tx;
+        let shutdown = Arc::clone(&shutdown);
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(cli.test_timeout_secs)).await;
+            tokio::time::sleep(Duration::from_secs(cli.test_timeout_secs)).await;
             tracing::info!("[system]: test timeout reached, shutting down");
-            let _ = tx.send(());
+            shutdown.notify_one();
         });
     }
 
-    let mut stream = ingest::stream(source)
-        .await
-        .context("failed to create market data stream")?;
+    let ctrl_c_watcher = tokio::spawn({
+        let shutdown = Arc::clone(&shutdown);
+        async move {
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("[system]: Ctrl+C received, shutting down");
+            shutdown.notify_one();
+        }
+    });
 
+    let mut set: JoinSet<()> = JoinSet::new();
+    for (exchange, instrument, source) in sources {
+        let broker = broker.clone();
+        set.spawn(run_exchange(exchange, instrument, source, broker));
+    }
+
+    // Run each exchange as an independent task: a single source ending or
+    // erroring does not stop the others. The application only exits on Ctrl+C,
+    // the test timeout, or once every source has ended.
+    let mut exited = false;
     loop {
         tokio::select! {
-            item = stream.next() => {
-                match item {
-                    Some(Ok(item)) => {
-                        if let Some(broker) = &broker {
-                            let topic = topic_for(&source_config.instrument, &item);
-                            match build_payload(&item) {
-                                Ok(payload) => {
-                                    if let Err(e) = broker.publish(&topic, &payload) {
-                                        tracing::error!("[system]: publish failed: {e}");
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("[system]: payload encoding failed: {e}");
-                                }
-                            }
-                        } else {
-                            tracing::info!("[system]: dry run: skipped forwarding");
-                        }
-                    }
-                    Some(Err(e)) => {
-                        tracing::error!("[system]: stream error: {e}");
-                        break;
-                    }
-                    None => {
-                        tracing::info!("[system]: stream ended");
-                        break;
-                    }
-                }
-            }
-            _ = &mut shutdown_rx => {
+            _ = shutdown.notified() => {
                 tracing::info!("[system]: shutdown signal received");
                 break;
             }
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("[system]: Ctrl+C received, shutting down");
-                break;
+            res = set.join_next() => {
+                match res {
+                    Some(Ok(())) => {
+                        tracing::info!("[system]: an exchange source ended");
+                    }
+                    Some(Err(ref e)) if e.is_panic() => {
+                        tracing::error!("[system]: a source task panicked: {e}");
+                    }
+                    Some(Err(e)) => {
+                        tracing::info!("[system]: a source task aborted: {e}");
+                    }
+                    None => {}
+                }
+                if set.is_empty() {
+                    exited = true;
+                    break;
+                }
             }
         }
     }
 
+    // Abort any tasks still running (e.g. on signal) so none outlive shutdown.
+    set.abort_all();
+    while set.join_next().await.is_some() {}
+
+    // The Ctrl+C watcher is no longer needed once we are shutting down.
+    ctrl_c_watcher.abort();
+
     drop(subscriber);
     drop(broker);
-    tracing::info!("[system]: bye");
+    if exited {
+        tracing::info!("[system]: all exchange sources ended, bye");
+    } else {
+        tracing::info!("[system]: bye");
+    }
     Ok(())
 }

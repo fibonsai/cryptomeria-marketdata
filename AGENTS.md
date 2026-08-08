@@ -45,7 +45,7 @@ over a TCP socket using NNG pub/sub.
 - `src/forward.rs` — Pure helpers: topic construction, JSON payload building, frame splitting, log prefix
 - `src/broker.rs` — NNG PUB broker + dedicated sender thread
 - `src/subscriber.rs` — Built-in NNG SUB log subscriber
-- `src/bin/marketdata.rs` — CLI entry point
+- `src/bin/marketdata.rs` — CLI entry point; spawns one parallel per-exchange task (`JoinSet`) sharing the broker
 - `config.toml` — Default configuration
 - `docs/adr/Core Architecture/` — Architecture decision records
 
@@ -55,12 +55,13 @@ over a TCP socket using NNG pub/sub.
 - Normalizes data into `MarketDataItem` enum (Lob or Trade variants)
 - Implements snapshot-first stream pattern (first LobItem is full snapshot)
 - Automatic reconnection with exponential backoff + jitter (via `cryptomeria-ingest`)
-- NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
-- Dynamic topics: `{type}__{instrument}` (e.g. `lob__btcusd`, `trade__btcusd`)
+- NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering, shared across exchange tasks via `Arc<Broker>`
+- Dynamic topics: `{type}__{instrument}` (e.g. `lob__btcusd`, `trade__btcusd`); the exchange is NOT part of the topic, so use distinct instruments per exchange to avoid collisions
+- Multiple exchanges configured under `[source.*]` run in parallel: each gets an independent tokio task with its own `cryptomeria-ingest` stream/reconnect; the app exits on Ctrl+C, `--test-timeout-secs`, or once every source has ended
 - Payload JSON preserved exactly as received (no fields added)
 - Built-in log subscriber (NNG SUB with empty prefix) logs raw payload JSON to stdout with `tracing` when `--data-out` is passed
 - `--test-timeout-secs` for CI/automated verification (0 = no timeout)
-- No task leaks: background tasks abort on shutdown signal
+- No task leaks: per-exchange tasks are aborted and drained from the `JoinSet` on shutdown
 - Pure functions for parsing/subscription building (testable without I/O)
 
 ## Development Guidelines
@@ -79,6 +80,7 @@ over a TCP socket using NNG pub/sub.
 - Resilience settings: initial_backoff_ms, max_backoff_ms, backoff_multiplier, jitter_ms, heartbeat_interval_secs, max_attempts
 - Instrument fallback: `alias` (optional) selects a per-exchange fallback mapping under `[source.<exchange>.fallback.<alias>]`; `fallback` maps alias → `ExchangeFallbackMapping` (base/quote/separator/case) within each `[source.<exchange>]` section
 - NNG port: default 14242 (configurable in `[nng]` section or `--port` CLI flag)
+- Multiple `[source.*]` sections are all consumed in parallel (one task per exchange); a single `SourceConfig` is still accepted and behaves exactly as before
 
 ## Adding Tests
 - Unit tests live in `#[cfg(test)] mod tests` blocks in `config.rs` and `forward.rs`

@@ -60,7 +60,7 @@ Edit `config.toml` (see the example file):
 
 ```toml
 [source.okx]
-exchange = "okx"           # subkey names this exchange; omit the field below
+# The section name "okx" is the exchange id; there is no `exchange` field.
 region = "global"          # global | europe
 instrument = "BTC-USDT"    # exchange-native symbol
 # alias = "btcusd"         # optional: selects a per-exchange fallback mapping
@@ -83,6 +83,27 @@ max_attempts = 0
 # quote_mappings = ["USDT", "USD"]
 # separator_mappings = ["-", "/"]
 # case_fallback = "upper"
+
+[nng]
+port = 14242
+```
+
+Multiple exchanges run in parallel. Add more `[source.<exchange>]` sections and
+each is consumed by its own independent background task, all publishing to the
+shared NNG broker. **Topics are `{type}__{instrument}` only — the exchange is not
+part of the topic** — so use distinct instruments per exchange to avoid
+collisions.
+
+```toml
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "trade"
+
+[source.kraken]
+region = "global"
+instrument = "XBT/USD"
+data_kind = "trade"
 
 [nng]
 port = 14242
@@ -113,7 +134,8 @@ Example payload:
 
 All log lines include a prefix tag identifying the source:
 
-- `[lob-okx]:`, `[trade-okx]:`, ... — a received data item
+- `[okx]:`, `[kraken]:`, ... — per-exchange lifecycle: stream start, errors,
+  publish failures, and (in `--dry-run`) per-item skipped forwarding
 - `[stdout_subscriber]:` — the built-in log subscriber lifecycle
 - `[system]:` — broker, timeouts and shutdown
 
@@ -122,23 +144,30 @@ All log lines include a prefix tag identifying the source:
 This app is a thin wrapper around `cryptomeria-ingest`. The ingestion
 library handles WebSocket connection management, snapshot-first
 synchronization, automatic reconnection, and data normalization. This
-binary loads the config, creates the stream, publishes to the NNG
-broker, and (optionally) runs the built-in log subscriber.
+binary loads the config, spawns one independent background task per
+configured exchange (all publishing to the shared NNG broker), and
+(optionally) runs the built-in log subscriber.
 
 Module layout (domain-first):
 
-- `src/config.rs` — TOML parsing, `AppConfig`/`SourceConfig`/`NngConfig`
+- `src/config.rs` — TOML parsing, `AppConfig`/`SourceConfig`/`NngConfig`,
+  multi-source collection (`exchange_sources`, `validated_sources`)
 - `src/forward.rs` — pure helpers: topic construction, JSON payload
-  building (with `exchange` augmentation), frame splitting, log prefix
-- `src/broker.rs` — NNG `Pub0` socket + dedicated sender thread
+  building, frame splitting
+- `src/broker.rs` — NNG `Pub0` socket + dedicated sender thread, shared via
+  `Arc<Broker>` across exchange tasks
 - `src/subscriber.rs` — built-in NNG `Sub0` log subscriber
-- `src/bin/marketdata.rs` — CLI, orchestration, shutdown
+- `src/bin/marketdata.rs` — CLI, orchestration of parallel exchange tasks, shutdown
 
 See the architecture decision records:
 
 - `docs/adr/Core Architecture/ADR-001-...-using-cryptomeria-ingest.md`
 - `docs/adr/Core Architecture/ADR-002-...-replace-nats-with-nng-tcp-subscriber.md`
 - `docs/adr/Core Architecture/ADR-003-...-remove-subscriber-registry.md`
+- `docs/adr/Core Architecture/ADR-004-...-pass-exchange-to-subscriber-from-config.md`
+- `docs/adr/Core Architecture/ADR-005-...-remove-exchange-param-from-log-subscriber.md`
+- `docs/adr/Core Architecture/ADR-006-...-restructure-config-schema-to-use-exchange-id-as-subkey.md`
+- `docs/adr/Core Architecture/ADR-007-...-multi-exchange-parallel-ingestion.md`
 
 ## License
 
