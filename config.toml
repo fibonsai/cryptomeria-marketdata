@@ -16,7 +16,7 @@ alias = "btcusd"
 # (no normalization), enabling cross-exchange disambiguation since
 # the exchange is NOT part of the topic. Leave empty/commented to
 # use the normalized instrument (e.g. `btcusd` from `BTC-USDT`).
-# suffix_topic = "okx_btcusd"
+suffix_topic = "btcusd"
 # Data to subscribe to: "lob", "trade", "both", or "lob|trade"
 data_kind = "both"
 # Max number of price levels per side (None = no limit)
@@ -76,6 +76,7 @@ case_fallback = "upper"
 region = "global"
 instrument = "btcusd"
 alias = "btcusd"
+suffix_topic = "btcusd"
 data_kind = "both"
 max_level = 3
 max_level_pct = 0.0
@@ -101,6 +102,7 @@ case_fallback = "upper"
 region = "global"
 instrument = "btcusd"
 alias = "btcusd"
+suffix_topic = "btcusd"
 data_kind = "both"
 max_level = 3
 max_level_pct = 0.0
