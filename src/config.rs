@@ -5,6 +5,10 @@ use std::collections::HashMap;
 const DEFAULT_SNAPSHOT_DEPTH: usize = 400;
 const DEFAULT_NNG_PORT: u16 = 14242;
 
+/// A single validated exchange source: exchange id, instrument symbol,
+/// data source config, and optional topic suffix override.
+pub type ValidatedSource = (String, String, DataSourceConfig, Option<String>);
+
 /// Top-level application configuration, loaded from a TOML file.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
@@ -32,18 +36,22 @@ impl AppConfig {
 
     /// Build a validated `DataSourceConfig` for every configured exchange.
     ///
-    /// Returns `(exchange, instrument, data_source)` tuples sorted by exchange
-    /// id. Validation is local (exchange/region/kind checks only); instrument
-    /// resolution against each exchange still happens inside `ingest::stream`.
-    /// This lets the caller fail fast on bad configs before binding the broker.
-    pub fn validated_sources(
-        &self,
-    ) -> Result<Vec<(String, String, DataSourceConfig)>, ConfigError> {
+    /// Returns `ValidatedSource` tuples sorted by exchange
+    /// id. The suffix is `None` when not configured. Validation is local
+    /// (exchange/region/kind checks only); instrument resolution against each
+    /// exchange still happens inside `ingest::stream`. This lets the caller
+    /// fail fast on bad configs before binding the broker.
+    pub fn validated_sources(&self) -> Result<Vec<ValidatedSource>, ConfigError> {
         self.exchange_sources()?
             .into_iter()
             .map(|(exchange, source)| {
                 let data_source = source.to_data_source(exchange)?;
-                Ok((exchange.clone(), source.instrument.clone(), data_source))
+                Ok((
+                    exchange.clone(),
+                    source.instrument.clone(),
+                    data_source,
+                    source.suffix_topic.clone(),
+                ))
             })
             .collect()
     }
@@ -73,6 +81,12 @@ pub struct SourceConfig {
     /// alias. See `cryptomeria-ingest` README for details.
     #[serde(default)]
     pub fallback: HashMap<String, ExchangeFallbackMapping>,
+    /// Optional suffix to override the normalized instrument name in NNG
+    /// topic names. When `Some(value)`, topics use `{kind}__{value}`
+    /// verbatim (no normalization); when `None`/absent, topics use the
+    /// normalized instrument `{kind}__{normalized}` as before.
+    #[serde(default)]
+    pub suffix_topic: Option<String>,
 }
 
 /// NNG PUB/SUB broker settings (TCP transport).
@@ -384,6 +398,51 @@ port = 14242
     }
 
     #[test]
+    fn suffix_topic_defaults_to_none_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.suffix_topic, None);
+    }
+
+    #[test]
+    fn parses_suffix_topic_when_present() {
+        let toml = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "both"
+suffix_topic = "mytopic"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.suffix_topic.as_deref(), Some("mytopic"));
+    }
+
+    #[test]
+    fn validated_sources_includes_suffix_topic() {
+        let toml = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "both"
+suffix_topic = "btcusdt"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let sources = config.validated_sources().unwrap();
+        let (_exchange, _instrument, _data_source, suffix) = sources
+            .iter()
+            .find(|(e, _, _, _)| *e == "okx")
+            .expect("okx should be present");
+        assert_eq!(suffix, &Some("btcusdt".to_string()));
+    }
+
+    #[test]
     fn to_data_source_forwards_alias_and_fallback() {
         let toml = r#"
 [source.okx]
@@ -441,16 +500,16 @@ port = 14242
         let config = parse_config(MULTI_EXCHANGE_TOML).unwrap();
         let sources = config.validated_sources().unwrap();
         assert_eq!(sources.len(), 2);
-        let exchanges: Vec<&str> = sources.iter().map(|(e, _, _)| e.as_str()).collect();
+        let exchanges: Vec<&str> = sources.iter().map(|(e, _, _, _)| e.as_str()).collect();
         assert_eq!(exchanges, vec!["kraken", "okx"]);
         let kraken = sources
             .iter()
-            .find(|(e, _, _)| *e == "kraken")
+            .find(|(e, _, _, _)| *e == "kraken")
             .expect("kraken should be present");
         assert_eq!(kraken.1, "XBT/USD");
         let okx = sources
             .iter()
-            .find(|(e, _, _)| *e == "okx")
+            .find(|(e, _, _, _)| *e == "okx")
             .expect("okx should be present");
         assert_eq!(okx.1, "BTC-USDT");
     }

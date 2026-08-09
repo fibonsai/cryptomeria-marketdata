@@ -12,7 +12,7 @@ and forwards the normalized events to subscribers over a TCP socket using
 - Normalized LOB snapshots/updates and trade executions
 - NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
 - Dynamic per-item topics named `{type}__{instrument}` (e.g. `lob__btcusd`,
-  `trade__btcusd`)
+  `trade__btcusd`), with optional `suffix_topic` override per exchange
 - Payload JSON preserved exactly as received from `cryptomeria-ingest`
 - Built-in log subscriber (gated by `--data-out`) that connects locally
   and logs every topic to stdout with the `[type-exchange]` prefix tag
@@ -67,7 +67,8 @@ instrument = "BTC-USDT"    # exchange-native symbol
 data_kind = "both"         # lob | trade | both | lob|trade
 max_level = 10             # optional: limit order book depth per side
 max_level_pct = 0.0        # optional: max % from best price (conflicts with max_level)
-snapshot_depth = 400       # depth for Bitstamp REST snapshot
+    snapshot_depth = 400       # depth for Bitstamp REST snapshot
+# suffix_topic = "okx_btcusd"  # optional: verbatim topic suffix (no normalization)
 
 [source.okx.resilience]
 initial_backoff_ms = 1000
@@ -93,6 +94,10 @@ each is consumed by its own independent background task, all publishing to the
 shared NNG broker. **Topics are `{type}__{instrument}` only — the exchange is not
 part of the topic** — so use distinct instruments per exchange to avoid
 collisions.
+
+When the default normalized instrument is not sufficient (e.g. two exchanges
+share the same instrument symbol), set `suffix_topic` to a verbatim string that
+becomes the topic segment: `{type}__{suffix_topic}`.
 
 ```toml
 [source.okx]

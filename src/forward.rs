@@ -45,12 +45,17 @@ pub fn normalize_instrument(instrument: &str) -> String {
 /// in parallel against the same instrument and kind the topics collide (last
 /// writer wins); operators must use distinct instruments per exchange to keep
 /// streams separate.
-pub fn topic_for(instrument: &str, item: &MarketDataItem) -> String {
-    format!(
-        "{}__{}",
-        ItemKind::from(item).as_str(),
-        normalize_instrument(instrument)
-    )
+///
+/// When `suffix` is `Some(value)`, the suffix is used **verbatim** (no
+/// normalization) as the topic segment, producing `{kind}__{value}`. This
+/// gives operators full control over topic naming and supports cross-exchange
+/// disambiguation (e.g. `okx__btcusd` vs `kraken__btcusdt`). When `suffix`
+/// is `None`, the instrument is normalized as before.
+pub fn topic_for(instrument: &str, item: &MarketDataItem, suffix: Option<&str>) -> String {
+    let segment = suffix
+        .map(str::to_owned)
+        .unwrap_or_else(|| normalize_instrument(instrument));
+    format!("{}__{}", ItemKind::from(item).as_str(), segment)
 }
 
 /// Serialize an item to JSON exactly as received from cryptomeria-ingest.
@@ -123,12 +128,33 @@ mod tests {
 
     #[test]
     fn builds_lob_topic_with_kind_and_instrument() {
-        assert_eq!(topic_for("BTC-USDT", &lob_item()), "lob__btcusdt");
+        assert_eq!(topic_for("BTC-USDT", &lob_item(), None), "lob__btcusdt");
     }
 
     #[test]
     fn builds_trade_topic_with_kind_and_instrument() {
-        assert_eq!(topic_for("BTC-USDT", &trade_item()), "trade__btcusdt");
+        assert_eq!(topic_for("BTC-USDT", &trade_item(), None), "trade__btcusdt");
+    }
+
+    #[test]
+    fn uses_suffix_override_in_place_of_instrument() {
+        assert_eq!(
+            topic_for("BTC-USDT", &lob_item(), Some("test")),
+            "lob__test"
+        );
+    }
+
+    #[test]
+    fn uses_suffix_override_for_trade_items() {
+        assert_eq!(
+            topic_for("BTC-USDT", &trade_item(), Some("test")),
+            "trade__test"
+        );
+    }
+
+    #[test]
+    fn suffix_none_uses_normalized_instrument() {
+        assert_eq!(topic_for("BTC-USD", &lob_item(), None), "lob__btcusd");
     }
 
     #[test]

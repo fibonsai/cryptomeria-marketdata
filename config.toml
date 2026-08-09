@@ -11,6 +11,12 @@ instrument = "btcusd"
 # under `[source.okx.fallback.<alias>]`. Only needed when the
 # primary instrument symbol is not recognized by the exchange.
 alias = "btcusd"
+# Optional suffix to override the normalized instrument name in NNG
+# topic names. When set, topics use `{kind}__{suffix}` verbatim
+# (no normalization), enabling cross-exchange disambiguation since
+# the exchange is NOT part of the topic. Leave empty/commented to
+# use the normalized instrument (e.g. `btcusd` from `BTC-USDT`).
+# suffix_topic = "okx_btcusd"
 # Data to subscribe to: "lob", "trade", "both", or "lob|trade"
 data_kind = "both"
 # Max number of price levels per side (None = no limit)
