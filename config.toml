@@ -6,7 +6,7 @@
 region = "global"
 # Instrument symbol in exchange-native format
 #   OKX:      "BTC-USDT",  Kraken: "XBT/USD",  Bitstamp: "BTC/USD"
-instrument = "alias"
+instrument = "btcusd"
 # Optional alias used to select a per-exchange fallback mapping
 # under `[source.okx.fallback.<alias>]`. Only needed when the
 # primary instrument symbol is not recognized by the exchange.
