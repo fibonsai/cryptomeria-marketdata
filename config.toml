@@ -68,7 +68,7 @@ case_fallback = "upper"
 
 [source.kraken]
 region = "global"
-instrument = "ALIAS"
+instrument = "btcusd"
 alias = "btcusd"
 data_kind = "both"
 max_level = 3
@@ -93,7 +93,7 @@ case_fallback = "upper"
 
 [source.bitstamp]
 region = "global"
-instrument = "ALIAS"
+instrument = "btcusd"
 alias = "btcusd"
 data_kind = "both"
 max_level = 3
