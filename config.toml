@@ -39,6 +39,10 @@ jitter_ms = 1000
 heartbeat_interval_secs = 0
 # Max reconnect attempts (0 = unlimited)
 max_attempts = 0
+# Silence timeout in seconds. If no messages are received from the
+# WebSocket for this duration, the connection is treated as failed
+# and reconnected. 0 or omitted = no silence detection.
+# silence_timeout_secs = 30
 
 # [source.okx.fallback]
 # Per-exchange fallback mappings for auto-resolving instrument symbol variants.
@@ -89,6 +93,10 @@ backoff_multiplier = 2.0
 jitter_ms = 1000
 heartbeat_interval_secs = 10
 max_attempts = 0
+# Silence timeout in seconds. If no messages are received from the
+# WebSocket for this duration, the connection is treated as failed
+# and reconnected. 0 or omitted = no silence detection.
+# silence_timeout_secs = 30
 
 [source.kraken.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]
@@ -115,6 +123,10 @@ backoff_multiplier = 2.0
 jitter_ms = 1000
 heartbeat_interval_secs = 10
 max_attempts = 0
+# Silence timeout in seconds. If no messages are received from the
+# WebSocket for this duration, the connection is treated as failed
+# and reconnected. 0 or omitted = no silence detection.
+# silence_timeout_secs = 30
 
 [source.bitstamp.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]

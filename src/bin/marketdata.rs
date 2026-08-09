@@ -33,6 +33,11 @@ struct Cli {
         help = "Exit automatically after this many seconds (0 = no timeout; for tests/CI)"
     )]
     test_timeout_secs: u64,
+    #[arg(
+        long,
+        help = "Override WebSocket silence-timeout (seconds) for all exchanges (0 or omitted = use config.toml)"
+    )]
+    silence_timeout_secs: Option<u64>,
 }
 
 fn init_tracing() {
@@ -103,6 +108,7 @@ async fn main() -> Result<()> {
     if let Some(port) = cli.port {
         app.nng.port = port;
     }
+    app.override_silence_timeout_secs(cli.silence_timeout_secs.filter(|&s| s > 0));
 
     // Build and validate every configured exchange up front so a bad config
     // fails before the broker binds. Each exchange gets its own independent
@@ -207,4 +213,21 @@ async fn main() -> Result<()> {
         tracing::info!("[system]: bye");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_silence_timeout_secs_flag() {
+        let cli = Cli::try_parse_from(["marketdata", "--silence-timeout-secs", "20"]).unwrap();
+        assert_eq!(cli.silence_timeout_secs, Some(20));
+    }
+
+    #[test]
+    fn silence_timeout_secs_defaults_to_none() {
+        let cli = Cli::try_parse_from(["marketdata"]).unwrap();
+        assert_eq!(cli.silence_timeout_secs, None);
+    }
 }

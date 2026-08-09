@@ -55,6 +55,20 @@ impl AppConfig {
             })
             .collect()
     }
+
+    /// Override `silence_timeout_secs` on every configured source.
+    ///
+    /// When `secs` is `Some(n)`, every `SourceConfig.resilience.silence_timeout_secs`
+    /// is set to `Some(n)` so that all exchange WebSocket streams share the same
+    /// silence-detection window. When `None`, individual source settings are
+    /// left untouched (used to apply a CLI override only when the flag is present).
+    pub fn override_silence_timeout_secs(&mut self, secs: Option<u64>) {
+        if let Some(secs) = secs {
+            for source in self.source.values_mut() {
+                source.resilience.silence_timeout_secs = Some(secs);
+            }
+        }
+    }
 }
 
 /// Exchange WebSocket subscription settings.
@@ -275,6 +289,58 @@ port = 14242
         assert_eq!(source.resilience.initial_backoff_ms, 500);
         assert_eq!(source.resilience.max_backoff_ms, 5000);
         assert_eq!(source.resilience.max_attempts, None);
+    }
+
+    #[test]
+    fn parses_silence_timeout_secs_under_resilience() {
+        let toml = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+[source.okx.resilience]
+initial_backoff_ms = 500
+max_backoff_ms = 5000
+backoff_multiplier = 2.0
+jitter_ms = 100
+silence_timeout_secs = 30
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.resilience.silence_timeout_secs, Some(30));
+    }
+
+    #[test]
+    fn silence_timeout_secs_defaults_to_none_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.resilience.silence_timeout_secs, None);
+    }
+
+    #[test]
+    fn to_data_source_forwards_silence_timeout_secs() {
+        let toml = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+[source.okx.resilience]
+initial_backoff_ms = 1000
+max_backoff_ms = 60000
+backoff_multiplier = 2.0
+jitter_ms = 1000
+silence_timeout_secs = 30
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("okx").unwrap();
+        let data_source = source.to_data_source("okx").unwrap();
+        assert_eq!(data_source.resilience.silence_timeout_secs, Some(30));
     }
 
     #[test]
@@ -528,5 +594,47 @@ port = 14242
         let config = parse_config(toml).unwrap();
         let result = config.validated_sources();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn override_silence_timeout_secs_sets_value_on_all_sources() {
+        let toml = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+
+[source.kraken]
+region = "global"
+instrument = "XBT/USD"
+data_kind = "trade"
+
+[nng]
+port = 14242
+"#;
+        let mut config = parse_config(toml).unwrap();
+        config.override_silence_timeout_secs(Some(45));
+        for source in config.source.values() {
+            assert_eq!(source.resilience.silence_timeout_secs, Some(45));
+        }
+    }
+
+    #[test]
+    fn override_silence_timeout_secs_none_leaves_existing_values() {
+        let toml = r#"
+[source.okx]
+region = "global"
+instrument = "BTC-USDT"
+data_kind = "lob"
+
+[nng]
+port = 14242
+"#;
+        let mut config = parse_config(toml).unwrap();
+        let okx = config.source.get("okx").unwrap();
+        let original = okx.resilience.silence_timeout_secs;
+        config.override_silence_timeout_secs(None);
+        let okx_after = config.source.get("okx").unwrap();
+        assert_eq!(okx_after.resilience.silence_timeout_secs, original);
     }
 }
