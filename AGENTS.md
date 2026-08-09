@@ -79,6 +79,7 @@ over a TCP socket using NNG pub/sub.
 - Data kinds: "lob", "trade", "both", "lob|trade"
 - Resilience settings: initial_backoff_ms, max_backoff_ms, backoff_multiplier, jitter_ms, heartbeat_interval_secs, max_attempts
 - Instrument fallback: `alias` (optional) selects a per-exchange fallback mapping under `[source.<exchange>.fallback.<alias>]`; `fallback` maps alias → `ExchangeFallbackMapping` (base/quote/separator/case) within each `[source.<exchange>]` section
+- Topic suffix override: `suffix_topic` (optional) — when set, NNG topics use `{kind}__{suffix_topic}` verbatim instead of `{kind}__{normalized_instrument}`; useful for cross-exchange disambiguation since the exchange is not part of the topic
 - NNG port: default 14242 (configurable in `[nng]` section or `--port` CLI flag)
 - Multiple `[source.*]` sections are all consumed in parallel (one task per exchange); a single `SourceConfig` is still accepted and behaves exactly as before
 

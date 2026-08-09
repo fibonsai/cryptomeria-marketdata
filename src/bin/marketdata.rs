@@ -48,6 +48,7 @@ async fn run_exchange(
     exchange: String,
     instrument: String,
     source: ingest::DataSourceConfig,
+    suffix: Option<String>,
     broker: Option<Arc<Broker>>,
 ) {
     tracing::info!("[{exchange}]: starting stream");
@@ -63,7 +64,7 @@ async fn run_exchange(
     loop {
         match stream.next().await {
             Some(Ok(item)) => {
-                let topic = topic_for(&instrument, &item);
+                let topic = topic_for(&instrument, &item, suffix.as_deref());
                 match build_payload(&item) {
                     Ok(payload) => {
                         if let Some(broker) = &broker {
@@ -155,9 +156,9 @@ async fn main() -> Result<()> {
     });
 
     let mut set: JoinSet<()> = JoinSet::new();
-    for (exchange, instrument, source) in sources {
+    for (exchange, instrument, source, suffix) in sources {
         let broker = broker.clone();
-        set.spawn(run_exchange(exchange, instrument, source, broker));
+        set.spawn(run_exchange(exchange, instrument, source, suffix, broker));
     }
 
     // Run each exchange as an independent task: a single source ending or
