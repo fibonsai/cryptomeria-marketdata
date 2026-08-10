@@ -17,7 +17,7 @@ and forwards the normalized events to subscribers over a TCP socket using
 - Built-in log subscriber (gated by `--data-out`) that connects locally
   and logs every topic to stdout as structured JSON:
   `{"topic":"...","payload":{...}}`
-- Async logging via `rasant` (no `println!`)
+- Async logging via `env_logger` behind the `log` facade (no `println!`); controlled by `RUST_LOG`
 - Configurable depth, level filtering, resilience (exponential backoff + jitter), and instrument fallback
 - Dry-run mode for local testing
 - Graceful shutdown on Ctrl+C, with `--test-timeout-secs` for CI
@@ -174,7 +174,8 @@ See the architecture decision records:
 - `docs/adr/Core Architecture/ADR-006-...-restructure-config-schema-to-use-exchange-id-as-subkey.md`
 - `docs/adr/Core Architecture/ADR-007-...-multi-exchange-parallel-ingestion.md`
 - `docs/adr/Core Architecture/ADR-008-...-add-suffix-topic-config-field.md`
-- `docs/adr/Core Architecture/ADR-009-...-migrate-logging-from-tracing-to-rasant.md`
+   - `docs/adr/Core Architecture/ADR-009-...-migrate-logging-from-tracing-to-rasant.md`
+   - `docs/adr/Core Architecture/ADR-010-...-migrate-logging-from-rasant-to-log-env_logger.md`
 
 ## License
 

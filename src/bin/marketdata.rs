@@ -5,8 +5,9 @@ use criptomeria_marketdata::config::parse_config;
 use criptomeria_marketdata::forward::{build_payload, topic_for};
 use criptomeria_marketdata::subscriber::StdoutSubscriber;
 use cryptomeria_ingest as ingest;
+use env_logger::Env;
 use futures_util::StreamExt;
-use rasant::Logger;
+use log::info;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
@@ -41,16 +42,10 @@ struct Cli {
     silence_timeout_secs: Option<u64>,
 }
 
-fn init_rasant() -> Logger {
-    let level = std::env::var("RUST_LOG")
-        .ok()
-        .and_then(|s| rasant::Level::try_from(s.as_str()).ok())
-        .unwrap_or(rasant::Level::Info);
-
-    let mut log = rasant::Logger::new();
-    log.add_sink(rasant::sink::stdout::default())
-        .set_level(level);
-    log
+fn init_logger() {
+    env_logger::Builder::from_env(Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .init();
 }
 
 /// Drain a single exchange stream, publishing each item under
@@ -62,14 +57,13 @@ async fn run_exchange(
     source: ingest::DataSourceConfig,
     suffix: Option<String>,
     broker: Option<Arc<Broker>>,
-    mut log: Logger,
 ) {
-    rasant::info!(log, &format!("[{exchange}]: starting stream"));
+    info!("[{exchange}]: starting stream");
 
     let mut stream = match ingest::stream(source).await {
         Ok(stream) => stream,
         Err(e) => {
-            rasant::error!(log, &format!("[{exchange}]: failed to create stream: {e}"));
+            log::error!("[{exchange}]: failed to create stream: {e}");
             return;
         }
     };
@@ -82,26 +76,23 @@ async fn run_exchange(
                     Ok(payload) => {
                         if let Some(broker) = &broker {
                             if let Err(e) = broker.publish(&topic, &payload) {
-                                rasant::error!(log, &format!("[{exchange}]: publish failed: {e}"));
+                                log::error!("[{exchange}]: publish failed: {e}");
                             }
                         } else {
-                            rasant::info!(
-                                log,
-                                &format!("[{exchange}]: dry-run: skipped forwarding")
-                            );
+                            info!("[{exchange}]: dry-run: skipped forwarding");
                         }
                     }
                     Err(e) => {
-                        rasant::error!(log, &format!("[{exchange}]: payload encoding failed: {e}"));
+                        log::error!("[{exchange}]: payload encoding failed: {e}");
                     }
                 }
             }
             Some(Err(e)) => {
-                rasant::error!(log, &format!("[{exchange}]: stream error: {e}"));
+                log::error!("[{exchange}]: stream error: {e}");
                 break;
             }
             None => {
-                rasant::info!(log, &format!("[{exchange}]: stream ended"));
+                info!("[{exchange}]: stream ended");
                 break;
             }
         }
@@ -110,7 +101,7 @@ async fn run_exchange(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut log = init_rasant();
+    init_logger();
     let cli = Cli::parse();
 
     let content = std::fs::read_to_string(&cli.config)
@@ -129,28 +120,22 @@ async fn main() -> Result<()> {
         .with_context(|| "no [source.<exchange>] section found in config")?;
 
     let broker = if cli.dry_run {
-        rasant::info!(log, "[system]: dry-run: NNG broker not started");
+        info!("[system]: dry-run: NNG broker not started");
         None
     } else {
-        let broker = Broker::bind(app.nng.port, log.clone())
-            .with_context(|| format!("failed to start NNG broker on port {}", app.nng.port))?;
-        rasant::info!(
-            log,
-            &format!(
-                "[system]: NNG broker listening on tcp://0.0.0.0:{}",
-                app.nng.port
-            )
-        );
-        Some(Arc::new(broker))
+        Some(Arc::new(Broker::bind(app.nng.port).with_context(|| {
+            format!("failed to start NNG broker on port {}", app.nng.port)
+        })?))
     };
 
-    let subscriber = if cli.data_out {
-        let sub = StdoutSubscriber::connect(app.nng.port, log.clone())
-            .with_context(|| format!("failed to start log subscriber on port {}", app.nng.port))?;
-        Some(sub)
-    } else {
-        None
-    };
+    let subscriber =
+        if cli.data_out {
+            Some(StdoutSubscriber::connect(app.nng.port).with_context(|| {
+                format!("failed to start log subscriber on port {}", app.nng.port)
+            })?)
+        } else {
+            None
+        };
 
     // Shared shutdown trigger: the test-timeout watcher and the Ctrl+C watcher
     // both notify `shutdown`. The main loop drains exchange tasks until a
@@ -159,20 +144,18 @@ async fn main() -> Result<()> {
 
     if cli.test_timeout_secs > 0 {
         let shutdown = Arc::clone(&shutdown);
-        let mut log = log.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(cli.test_timeout_secs)).await;
-            rasant::info!(log, "[system]: test timeout reached, shutting down");
+            info!("[system]: test timeout reached, shutting down");
             shutdown.notify_one();
         });
     }
 
     let ctrl_c_watcher = tokio::spawn({
         let shutdown = Arc::clone(&shutdown);
-        let mut log = log.clone();
         async move {
             tokio::signal::ctrl_c().await.ok();
-            rasant::info!(log, "[system]: Ctrl+C received, shutting down");
+            info!("[system]: Ctrl+C received, shutting down");
             shutdown.notify_one();
         }
     });
@@ -180,10 +163,7 @@ async fn main() -> Result<()> {
     let mut set: JoinSet<()> = JoinSet::new();
     for (exchange, instrument, source, suffix) in sources {
         let broker = broker.clone();
-        let log = log.clone();
-        set.spawn(run_exchange(
-            exchange, instrument, source, suffix, broker, log,
-        ));
+        set.spawn(run_exchange(exchange, instrument, source, suffix, broker));
     }
 
     // Run each exchange as an independent task: a single source ending or
@@ -193,19 +173,19 @@ async fn main() -> Result<()> {
     loop {
         tokio::select! {
             _ = shutdown.notified() => {
-                rasant::info!(log, "[system]: shutdown signal received");
+                info!("[system]: shutdown signal received");
                 break;
             }
             res = set.join_next() => {
                 match res {
                     Some(Ok(())) => {
-                        rasant::info!(log, "[system]: an exchange source ended");
+                        info!("[system]: an exchange source ended");
                     }
                     Some(Err(ref e)) if e.is_panic() => {
-                        rasant::error!(log, &format!("[system]: a source task panicked: {e}"));
+                        log::error!("[system]: a source task panicked: {e}");
                     }
                     Some(Err(e)) => {
-                        rasant::info!(log, &format!("[system]: a source task aborted: {e}"));
+                        info!("[system]: a source task aborted: {e}");
                     }
                     None => {}
                 }
@@ -227,9 +207,9 @@ async fn main() -> Result<()> {
     drop(subscriber);
     drop(broker);
     if exited {
-        rasant::info!(log, "[system]: all exchange sources ended, bye");
+        info!("[system]: all exchange sources ended, bye");
     } else {
-        rasant::info!(log, "[system]: bye");
+        info!("[system]: bye");
     }
     Ok(())
 }

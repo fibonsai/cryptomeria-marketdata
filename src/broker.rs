@@ -1,8 +1,8 @@
 use crate::forward::frame_message;
 use anyhow::{Context, Result, anyhow};
+use log::warn;
 use nng::options::{Options, SendTimeout};
 use nng::{Message, Protocol, Socket};
-use rasant::Logger;
 use std::sync::Mutex;
 use std::sync::mpsc::{self, SyncSender};
 use std::thread::{self, JoinHandle};
@@ -20,12 +20,11 @@ const SEND_TIMEOUT_MS: u64 = 1000;
 pub struct Broker {
     sender: Option<SyncSender<Vec<u8>>>,
     handle: Mutex<Option<JoinHandle<()>>>,
-    log: Logger,
 }
 
 impl Broker {
     /// Bind an NNG PUB socket on `tcp://0.0.0.0:{port}` and spawn its sender thread.
-    pub fn bind(port: u16, log: Logger) -> Result<Self> {
+    pub fn bind(port: u16) -> Result<Self> {
         let socket = Socket::new(Protocol::Pub0).context("failed to create NNG pub socket")?;
         socket
             .set_opt::<SendTimeout>(Some(Duration::from_millis(SEND_TIMEOUT_MS)))
@@ -37,16 +36,12 @@ impl Broker {
         let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(PUBLISH_CHANNEL_CAPACITY);
         let handle = thread::Builder::new()
             .name("nng-broker".to_string())
-            .spawn({
-                let log = log.clone();
-                move || sender_thread(socket, receiver, log)
-            })
+            .spawn(move || sender_thread(socket, receiver))
             .context("failed to spawn NNG broker thread")?;
 
         Ok(Self {
             sender: Some(sender),
             handle: Mutex::new(Some(handle)),
-            log,
         })
     }
 
@@ -61,10 +56,7 @@ impl Broker {
         match sender.try_send(framed) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Full(_)) => {
-                rasant::warn!(
-                    self.log.clone(),
-                    &format!("[system]: publish backlog full, dropping message for {topic}")
-                );
+                warn!("[system]: publish backlog full, dropping message for {topic}");
                 Ok(())
             }
             Err(mpsc::TrySendError::Disconnected(_)) => Err(anyhow!("NNG broker thread is gone")),
@@ -86,12 +78,12 @@ impl Drop for Broker {
     }
 }
 
-fn sender_thread(socket: Socket, receiver: mpsc::Receiver<Vec<u8>>, mut log: Logger) {
+fn sender_thread(socket: Socket, receiver: mpsc::Receiver<Vec<u8>>) {
     while let Ok(framed) = receiver.recv() {
         let mut message = Message::new();
         message.push_back(&framed);
         if let Err(err) = socket.send(message) {
-            rasant::warn!(log, &format!("[system]: NNG send failed: {err:?}"));
+            warn!("[system]: NNG send failed: {err:?}");
         }
     }
 }
@@ -111,10 +103,7 @@ mod tests {
     #[test]
     fn delivers_published_message_to_subscriber() {
         let port = ephemeral_port();
-        let mut log = rasant::Logger::new();
-        log.add_sink(rasant::sink::black_hole::default())
-            .set_level(rasant::Level::Info);
-        let broker = Broker::bind(port, log).unwrap();
+        let broker = Broker::bind(port).unwrap();
 
         let sub = Socket::new(Protocol::Sub0).unwrap();
         sub.set_opt::<Subscribe>(b"lob__btcusdt".to_vec()).unwrap();
