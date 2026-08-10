@@ -23,8 +23,6 @@ data_kind = "both"
 max_level = 3
 # Max percentage from best price (0.0 = no limit; conflicts with max_level)
 max_level_pct = 0.0
-# Depth for REST snapshot (used by Bitstamp)
-snapshot_depth = 400
 
 [source.okx.resilience]
 # Initial backoff in milliseconds
@@ -84,7 +82,6 @@ suffix_topic = "btcusd"
 data_kind = "both"
 max_level = 3
 max_level_pct = 0.0
-snapshot_depth = 400
 
 [source.kraken.resilience]
 initial_backoff_ms = 1000
@@ -114,7 +111,6 @@ suffix_topic = "btcusd"
 data_kind = "both"
 max_level = 3
 max_level_pct = 0.0
-snapshot_depth = 400
 
 [source.bitstamp.resilience]
 initial_backoff_ms = 1000

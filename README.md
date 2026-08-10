@@ -68,7 +68,6 @@ instrument = "BTC-USDT"    # exchange-native symbol
 data_kind = "both"         # lob | trade | both | lob|trade
 max_level = 10             # optional: limit order book depth per side
 max_level_pct = 0.0        # optional: max % from best price (conflicts with max_level)
-    snapshot_depth = 400       # depth for Bitstamp REST snapshot
 # suffix_topic = "okx_btcusd"  # optional: verbatim topic suffix (no normalization)
 
 [source.okx.resilience]

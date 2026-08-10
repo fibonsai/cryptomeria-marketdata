@@ -2,7 +2,6 @@ use cryptomeria_ingest::{DataKind, DataSourceConfig, ExchangeFallbackMapping, Re
 use serde::Deserialize;
 use std::collections::HashMap;
 
-const DEFAULT_SNAPSHOT_DEPTH: usize = 400;
 const DEFAULT_NNG_PORT: u16 = 14242;
 
 /// A single validated exchange source: exchange id, instrument symbol,
@@ -87,8 +86,6 @@ pub struct SourceConfig {
     pub max_level: Option<usize>,
     #[serde(default)]
     pub max_level_pct: f64,
-    #[serde(default = "default_snapshot_depth")]
-    pub snapshot_depth: usize,
     #[serde(default)]
     pub resilience: ResilienceConfig,
     /// Per-alias fallback mappings for this exchange, keyed by instrument
@@ -108,10 +105,6 @@ pub struct SourceConfig {
 pub struct NngConfig {
     #[serde(default = "default_nng_port")]
     pub port: u16,
-}
-
-fn default_snapshot_depth() -> usize {
-    DEFAULT_SNAPSHOT_DEPTH
 }
 
 fn default_nng_port() -> u16 {
@@ -176,7 +169,6 @@ impl SourceConfig {
             alias: self.alias.clone(),
             max_level: self.max_level,
             max_level_pct: self.max_level_pct,
-            snapshot_depth: self.snapshot_depth,
             resilience: self.resilience.clone(),
             fallback: HashMap::from([(exchange.to_string(), self.fallback.clone())]),
         };
@@ -234,8 +226,8 @@ port = 14242
     fn applies_defaults_for_optional_fields() {
         let config = parse_config(VALID_TOML).unwrap();
         let source = config.source.get("okx").unwrap();
-        assert_eq!(source.snapshot_depth, DEFAULT_SNAPSHOT_DEPTH);
         assert_eq!(source.max_level, None);
+        assert_eq!(source.max_level_pct, 0.0);
         assert_eq!(config.nng.port, DEFAULT_NNG_PORT);
     }
 
