@@ -39,9 +39,10 @@ impl Broker {
                     Ok(addr) => info!("[broker]: subscriber connected from {addr}"),
                     Err(_) => info!("[broker]: subscriber connected"),
                 },
-                PipeEvent::RemovePost => {
-                    info!("[broker]: subscriber disconnected");
-                }
+                PipeEvent::RemovePost => match pipe.get_opt::<RemAddr>() {
+                    Ok(addr) => info!("[broker]: subscriber disconnected from {addr}"),
+                    Err(_) => info!("[broker]: subscriber disconnected"),
+                },
                 _ => {}
             })
             .context("failed to register pipe notify callback")?;
