@@ -15,8 +15,9 @@ and forwards the normalized events to subscribers over a TCP socket using
   `trade__btcusd`), with optional `suffix_topic` override per exchange
 - Payload JSON preserved exactly as received from `cryptomeria-ingest`
 - Built-in log subscriber (gated by `--data-out`) that connects locally
-  and logs every topic to stdout with the `[type-exchange]` prefix tag
-- Async logging via `tracing` (no `println!`)
+  and logs every topic to stdout as structured JSON:
+  `{"topic":"...","payload":{...}}`
+- Async logging via `rasant` (no `println!`)
 - Configurable depth, level filtering, resilience (exponential backoff + jitter), and instrument fallback
 - Dry-run mode for local testing
 - Graceful shutdown on Ctrl+C, with `--test-timeout-secs` for CI
@@ -173,6 +174,8 @@ See the architecture decision records:
 - `docs/adr/Core Architecture/ADR-005-...-remove-exchange-param-from-log-subscriber.md`
 - `docs/adr/Core Architecture/ADR-006-...-restructure-config-schema-to-use-exchange-id-as-subkey.md`
 - `docs/adr/Core Architecture/ADR-007-...-multi-exchange-parallel-ingestion.md`
+- `docs/adr/Core Architecture/ADR-008-...-add-suffix-topic-config-field.md`
+- `docs/adr/Core Architecture/ADR-009-...-migrate-logging-from-tracing-to-rasant.md`
 
 ## License
 

@@ -42,7 +42,7 @@ over a TCP socket using NNG pub/sub.
 ## Project Structure
 - `src/lib.rs` — Library exports (`config`, `forward`, `broker`, `subscriber`)
 - `src/config.rs` — Application configuration parsing/validation
-- `src/forward.rs` — Pure helpers: topic construction, JSON payload building, frame splitting, log prefix
+- `src/forward.rs` — Pure helpers: topic construction, JSON payload building, frame splitting, log entry building (`build_log_entry`)
 - `src/broker.rs` — NNG PUB broker + dedicated sender thread
 - `src/subscriber.rs` — Built-in NNG SUB log subscriber
 - `src/bin/marketdata.rs` — CLI entry point; spawns one parallel per-exchange task (`JoinSet`) sharing the broker
@@ -59,7 +59,7 @@ over a TCP socket using NNG pub/sub.
 - Dynamic topics: `{type}__{instrument}` (e.g. `lob__btcusd`, `trade__btcusd`); the exchange is NOT part of the topic, so use distinct instruments per exchange to avoid collisions
 - Multiple exchanges configured under `[source.*]` run in parallel: each gets an independent tokio task with its own `cryptomeria-ingest` stream/reconnect; the app exits on Ctrl+C, `--test-timeout-secs`, or once every source has ended
 - Payload JSON preserved exactly as received (no fields added)
-- Built-in log subscriber (NNG SUB with empty prefix) logs raw payload JSON to stdout with `tracing` when `--data-out` is passed
+- Built-in log subscriber (NNG SUB with empty prefix) logs structured JSON `{"topic":...,"payload":...}` to stdout with `rasant` when `--data-out` is passed
 - `--test-timeout-secs` for CI/automated verification (0 = no timeout)
 - No task leaks: per-exchange tasks are aborted and drained from the `JoinSet` on shutdown
 - Pure functions for parsing/subscription building (testable without I/O)
