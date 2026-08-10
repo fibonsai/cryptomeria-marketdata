@@ -59,7 +59,7 @@ over a TCP socket using NNG pub/sub.
 - Dynamic topics: `{type}__{instrument}` (e.g. `lob__btcusd`, `trade__btcusd`); the exchange is NOT part of the topic, so use distinct instruments per exchange to avoid collisions
 - Multiple exchanges configured under `[source.*]` run in parallel: each gets an independent tokio task with its own `cryptomeria-ingest` stream/reconnect; the app exits on Ctrl+C, `--test-timeout-secs`, or once every source has ended
 - Payload JSON preserved exactly as received (no fields added)
-- Built-in log subscriber (NNG SUB with empty prefix) logs structured JSON `{"topic":...,"payload":...}` to stdout with `rasant` when `--data-out` is passed
+- Built-in log subscriber (NNG SUB with empty prefix) logs structured JSON `{"topic":...,"payload":...}` to stdout via `env_logger` when `--data-out` is passed
 - `--test-timeout-secs` for CI/automated verification (0 = no timeout)
 - No task leaks: per-exchange tasks are aborted and drained from the `JoinSet` on shutdown
 - Pure functions for parsing/subscription building (testable without I/O)
