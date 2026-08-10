@@ -1,8 +1,8 @@
 use crate::forward::frame_message;
 use anyhow::{Context, Result, anyhow};
-use log::warn;
-use nng::options::{Options, SendTimeout};
-use nng::{Message, Protocol, Socket};
+use log::{info, warn};
+use nng::options::{Options, RemAddr, SendTimeout};
+use nng::{Message, PipeEvent, Protocol, Socket};
 use std::sync::Mutex;
 use std::sync::mpsc::{self, SyncSender};
 use std::thread::{self, JoinHandle};
@@ -32,6 +32,19 @@ impl Broker {
         socket
             .listen(&format!("tcp://0.0.0.0:{port}"))
             .with_context(|| format!("failed to bind NNG broker on port {port}"))?;
+
+        socket
+            .pipe_notify(|pipe, event| match event {
+                PipeEvent::AddPost => match pipe.get_opt::<RemAddr>() {
+                    Ok(addr) => info!("[broker]: subscriber connected from {addr}"),
+                    Err(_) => info!("[broker]: subscriber connected"),
+                },
+                PipeEvent::RemovePost => {
+                    info!("[broker]: subscriber disconnected");
+                }
+                _ => {}
+            })
+            .context("failed to register pipe notify callback")?;
 
         let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(PUBLISH_CHANNEL_CAPACITY);
         let handle = thread::Builder::new()
@@ -121,5 +134,26 @@ mod tests {
             crate::forward::split_frame(message.as_slice()).expect("message is well framed");
         assert_eq!(topic, "lob__btcusdt");
         assert_eq!(payload, br#"{"ts":123}"#);
+    }
+
+    #[test]
+    fn pipe_notify_fires_on_subscriber_connect_and_disconnect() {
+        let port = ephemeral_port();
+        let broker = Broker::bind(port).unwrap();
+
+        let sub = Socket::new(Protocol::Sub0).unwrap();
+        sub.set_opt::<Subscribe>(Vec::<u8>::new()).unwrap();
+        sub.set_opt::<RecvTimeout>(Some(Duration::from_millis(500)))
+            .unwrap();
+        sub.dial(&format!("tcp://127.0.0.1:{port}")).unwrap();
+
+        std::thread::sleep(Duration::from_millis(100));
+
+        drop(sub);
+        std::thread::sleep(Duration::from_millis(200));
+
+        broker
+            .publish("lob__btcusdt", br#"{"ts":1}"#)
+            .expect("publish still succeeds after subscriber disconnects");
     }
 }
