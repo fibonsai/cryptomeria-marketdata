@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use nng::options::protocol::pubsub::Subscribe;
 use nng::options::{Options, RecvTimeout};
 use nng::{Error, Protocol, Socket};
+use rasant::Logger;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -11,15 +12,16 @@ const RECV_TIMEOUT_MS: u64 = 500;
 
 /// The built-in log subscriber: connects to the local NNG TCP port, subscribes
 /// to every current and future topic and logs received messages to stdout with
-/// tracing. Only loaded when `--data-out` is passed.
+/// rasant in a structured JSON schema. Only loaded when `--data-out` is passed.
 pub struct StdoutSubscriber {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    log: Logger,
 }
 
 impl StdoutSubscriber {
     /// Connect to `tcp://127.0.0.1:{port}` and subscribe to all topics.
-    pub fn connect(port: u16) -> Result<Self> {
+    pub fn connect(port: u16, mut log: Logger) -> Result<Self> {
         let socket = Socket::new(Protocol::Sub0).context("failed to create NNG sub socket")?;
         socket
             .set_opt::<Subscribe>(Vec::<u8>::new())
@@ -31,8 +33,11 @@ impl StdoutSubscriber {
             .dial(&format!("tcp://127.0.0.1:{port}"))
             .with_context(|| format!("failed to connect log subscriber to port {port}"))?;
 
-        tracing::info!(
-            "[stdout_subscriber]: connected to tcp://127.0.0.1:{port}, subscribing to all topics"
+        rasant::info!(
+            log,
+            &format!(
+                "[stdout_subscriber]: connected to tcp://127.0.0.1:{port}, subscribing to all topics"
+            )
         );
 
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -40,13 +45,15 @@ impl StdoutSubscriber {
             .name("stdout-subscriber".to_string())
             .spawn({
                 let shutdown = Arc::clone(&shutdown);
-                move || receive_loop(socket, shutdown)
+                let log = log.clone();
+                move || receive_loop(socket, shutdown, log)
             })
             .context("failed to spawn log subscriber thread")?;
 
         Ok(Self {
             shutdown,
             handle: Some(handle),
+            log,
         })
     }
 
@@ -56,7 +63,7 @@ impl StdoutSubscriber {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
-        tracing::info!("[stdout_subscriber]: shutting down");
+        rasant::info!(self.log.clone(), "[stdout_subscriber]: shutting down");
     }
 }
 
@@ -66,23 +73,28 @@ impl Drop for StdoutSubscriber {
     }
 }
 
-fn receive_loop(socket: Socket, shutdown: Arc<AtomicBool>) {
+fn receive_loop(socket: Socket, shutdown: Arc<AtomicBool>, mut log: Logger) {
     while !shutdown.load(Ordering::Relaxed) {
         match socket.recv() {
-            Ok(message) => log_message(&message),
+            Ok(message) => log_message(log.clone(), &message),
             Err(Error::TimedOut) => continue,
             Err(err) => {
-                tracing::warn!("[stdout_subscriber]: receive error: {err}");
+                rasant::warn!(log, &format!("[stdout_subscriber]: receive error: {err}"));
                 break;
             }
         }
     }
 }
 
-fn log_message(message: &nng::Message) {
+fn log_message(mut log: Logger, message: &nng::Message) {
     let bytes = message.as_slice();
-    let payload_str = String::from_utf8_lossy(bytes);
-    tracing::info!("{}", payload_str);
+    match crate::forward::build_log_entry(bytes) {
+        Ok(entry) => rasant::info!(log, entry.as_str()),
+        Err(e) => rasant::warn!(
+            log,
+            &format!("[stdout_subscriber]: failed to parse frame: {e}")
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -92,10 +104,52 @@ mod tests {
     use nng::Message;
 
     #[test]
-    fn log_message_logs_raw_payload() {
+    fn log_message_emits_structured_json_schema() {
+        let mut log = rasant::Logger::new();
+        let mem_sink = rasant::sink::memory::default();
+        let output = mem_sink.output();
+        log.add_sink(mem_sink).set_level(rasant::Level::Info);
+
         let framed = frame_message("lob__btcusdt", br#"{"exchange":"okx","ts":123}"#);
         let mut message = Message::new();
         message.push_back(&framed);
-        log_message(&message);
+        log_message(log, &message);
+
+        let result = output.as_string();
+        let json_start = result
+            .find('{')
+            .expect("output should contain JSON message");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result[json_start..]).expect("message should be valid JSON");
+        assert_eq!(parsed["topic"], "lob__btcusdt");
+        assert_eq!(parsed["payload"]["exchange"], "okx");
+        assert_eq!(parsed["payload"]["ts"], 123);
+    }
+
+    #[test]
+    fn log_message_emits_json_schema_for_trade_topic() {
+        let mut log = rasant::Logger::new();
+        let mem_sink = rasant::sink::memory::default();
+        let output = mem_sink.output();
+        log.add_sink(mem_sink).set_level(rasant::Level::Info);
+
+        let framed = frame_message(
+            "trade__btcusdt",
+            br#"{"price":100.0,"size":1.0,"side":"buy"}"#,
+        );
+        let mut message = Message::new();
+        message.push_back(&framed);
+        log_message(log, &message);
+
+        let result = output.as_string();
+        let json_start = result
+            .find('{')
+            .expect("output should contain JSON message");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result[json_start..]).expect("message should be valid JSON");
+        assert_eq!(parsed["topic"], "trade__btcusdt");
+        assert_eq!(parsed["payload"]["price"], 100.0);
+        assert_eq!(parsed["payload"]["size"], 1.0);
+        assert_eq!(parsed["payload"]["side"], "buy");
     }
 }

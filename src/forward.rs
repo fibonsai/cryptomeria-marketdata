@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use cryptomeria_ingest::MarketDataItem;
 
 /// The kind of market data item: order book or trade.
@@ -82,6 +82,20 @@ pub fn split_frame(bytes: &[u8]) -> Option<(String, &[u8])> {
     let idx = bytes.iter().position(|&b| b == FRAME_SEPARATOR)?;
     let topic = String::from_utf8_lossy(&bytes[..idx]).into_owned();
     Some((topic, &bytes[idx + 1..]))
+}
+
+/// Build a structured JSON log entry from a framed NNG wire message.
+///
+/// Splits the frame into `(topic, payload)`, parses the payload as JSON, and
+/// returns a compact JSON string: `{"topic":"...","payload":{...}}`.
+///
+/// Returns an error when the frame has no separator or the payload is not valid JSON.
+pub fn build_log_entry(framed: &[u8]) -> Result<String> {
+    let (topic, payload_bytes) =
+        split_frame(framed).ok_or_else(|| anyhow!("message frame has no separator"))?;
+    let payload_value: serde_json::Value = serde_json::from_slice(payload_bytes)?;
+    serde_json::to_string(&serde_json::json!({"topic": topic, "payload": payload_value}))
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -181,5 +195,44 @@ mod tests {
     #[test]
     fn split_frame_returns_none_without_separator() {
         assert!(split_frame(b"no separator here").is_none());
+    }
+
+    #[test]
+    fn build_log_entry_produces_topic_and_payload_json() {
+        let framed = frame_message("lob__btcusdt", br#"{"exchange":"okx","ts":123}"#);
+        let entry = build_log_entry(&framed).expect("frame with valid JSON payload should parse");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&entry).expect("output should be valid JSON");
+        assert_eq!(parsed["topic"], "lob__btcusdt");
+        assert_eq!(parsed["payload"]["exchange"], "okx");
+        assert_eq!(parsed["payload"]["ts"], 123);
+    }
+
+    #[test]
+    fn build_log_entry_preserves_nested_payload_structure() {
+        let framed = frame_message(
+            "trade__btcusdt",
+            br#"{"price":100.0,"size":1.0,"side":"buy"}"#,
+        );
+        let entry = build_log_entry(&framed).expect("frame with valid JSON payload should parse");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&entry).expect("output should be valid JSON");
+        assert_eq!(parsed["topic"], "trade__btcusdt");
+        assert_eq!(parsed["payload"]["price"], 100.0);
+        assert_eq!(parsed["payload"]["size"], 1.0);
+        assert_eq!(parsed["payload"]["side"], "buy");
+    }
+
+    #[test]
+    fn build_log_entry_errors_when_payload_is_not_json() {
+        let framed = frame_message("lob__btcusdt", b"not json");
+        let result = build_log_entry(&framed);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_log_entry_errors_when_frame_has_no_separator() {
+        let result = build_log_entry(b"no separator here");
+        assert!(result.is_err());
     }
 }
