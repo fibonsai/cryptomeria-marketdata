@@ -71,7 +71,7 @@ impl AppConfig {
 }
 
 /// Exchange WebSocket subscription settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SourceConfig {
     pub region: String,
     pub instrument: String,
@@ -98,6 +98,14 @@ pub struct SourceConfig {
     /// normalized instrument `{kind}__{normalized}` as before.
     #[serde(default)]
     pub suffix_topic: Option<String>,
+    /// Optional API key for exchanges that require WebSocket authentication
+    /// (e.g. Bitvavo). Ignored by exchanges that do not require credentials.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional API secret for exchanges that require WebSocket authentication
+    /// (e.g. Bitvavo). Ignored by exchanges that do not require credentials.
+    #[serde(default)]
+    pub api_secret: Option<String>,
 }
 
 /// NNG PUB/SUB broker settings (TCP transport).
@@ -157,10 +165,30 @@ impl SourceConfig {
         parse_data_kind(&self.data_kind)
     }
 
+    /// Resolve API credentials for an exchange.
+    ///
+    /// Config values take precedence over environment variables. For
+    /// `bitvavo`, when the config value is absent the method falls back to
+    /// `BITVAVO_API_KEY` / `BITVAVO_API_SECRET` environment variables. For other
+    /// exchanges, environment variables are not consulted and the config value
+    /// (or `None`) is returned as-is.
+    pub fn resolve_credentials(&self, exchange: &str) -> (Option<String>, Option<String>) {
+        let key = self
+            .api_key
+            .clone()
+            .or_else(|| env_credential(exchange, "BITVAVO_API_KEY"));
+        let secret = self
+            .api_secret
+            .clone()
+            .or_else(|| env_credential(exchange, "BITVAVO_API_SECRET"));
+        (key, secret)
+    }
+
     /// Convert to the ingest `DataSourceConfig`, validating exchange/region.
     ///
     /// `exchange` is the key from the parent `[source.<exchange>]` section.
     pub fn to_data_source(&self, exchange: &str) -> Result<DataSourceConfig, ConfigError> {
+        let (api_key, api_secret) = self.resolve_credentials(exchange);
         let data_source = DataSourceConfig {
             exchange: exchange.to_string(),
             region: self.region.clone(),
@@ -171,6 +199,8 @@ impl SourceConfig {
             max_level_pct: self.max_level_pct,
             resilience: self.resilience.clone(),
             fallback: HashMap::from([(exchange.to_string(), self.fallback.clone())]),
+            api_key,
+            api_secret,
         };
         data_source
             .validate()
@@ -179,10 +209,35 @@ impl SourceConfig {
     }
 }
 
+/// Read a credential from an environment variable, but only for exchanges
+/// that are known to require it (currently `bitvavo`). Empty strings are
+/// treated as absent.
+fn env_credential(exchange: &str, var: &str) -> Option<String> {
+    if exchange == "bitvavo" {
+        std::env::var(var).ok().filter(|s| !s.is_empty())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cryptomeria_ingest::CaseFallback;
+    use std::sync::Mutex;
+
+    // Serializes env-var-dependent tests so parallel runners don't collide.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // Rust 2024 makes `env::set_var` / `env::remove_var` unsafe. These wrappers
+    // keep the test bodies readable; callers must hold `ENV_LOCK`.
+    fn set_env(name: &str, val: &str) {
+        unsafe { std::env::set_var(name, val) }
+    }
+
+    fn remove_env(name: &str) {
+        unsafe { std::env::remove_var(name) }
+    }
 
     const VALID_TOML: &str = r#"
 [source.okx]
@@ -628,5 +683,225 @@ port = 14242
         config.override_silence_timeout_secs(None);
         let okx_after = config.source.get("okx").unwrap();
         assert_eq!(okx_after.resilience.silence_timeout_secs, original);
+    }
+
+    #[test]
+    fn parses_api_key_and_api_secret_from_toml() {
+        let toml = r#"
+[source.bitvavo]
+region = "global"
+instrument = "BTC-EUR"
+data_kind = "both"
+api_key = "my-key"
+api_secret = "my-secret"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("bitvavo").unwrap();
+        assert_eq!(source.api_key.as_deref(), Some("my-key"));
+        assert_eq!(source.api_secret.as_deref(), Some("my-secret"));
+    }
+
+    #[test]
+    fn api_key_and_api_secret_default_to_none_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        let source = config.source.get("okx").unwrap();
+        assert_eq!(source.api_key, None);
+        assert_eq!(source.api_secret, None);
+    }
+
+    #[test]
+    fn resolve_credentials_returns_config_value_when_present() {
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-EUR".into(),
+            data_kind: "both".into(),
+            api_key: Some("config-key".into()),
+            api_secret: Some("config-secret".into()),
+            ..Default::default()
+        };
+        let (key, secret) = source.resolve_credentials("bitvavo");
+        assert_eq!(key, Some("config-key".into()));
+        assert_eq!(secret, Some("config-secret".into()));
+    }
+
+    #[test]
+    fn resolve_credentials_falls_back_to_env_for_bitvavo() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-EUR".into(),
+            data_kind: "both".into(),
+            ..Default::default()
+        };
+        set_env("BITVAVO_API_KEY", "env-key");
+        set_env("BITVAVO_API_SECRET", "env-secret");
+        let (key, secret) = source.resolve_credentials("bitvavo");
+        remove_env("BITVAVO_API_KEY");
+        remove_env("BITVAVO_API_SECRET");
+        assert_eq!(key, Some("env-key".into()));
+        assert_eq!(secret, Some("env-secret".into()));
+    }
+
+    #[test]
+    fn resolve_credentials_returns_none_when_no_config_or_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        remove_env("BITVAVO_API_KEY");
+        remove_env("BITVAVO_API_SECRET");
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-EUR".into(),
+            data_kind: "both".into(),
+            ..Default::default()
+        };
+        let (key, secret) = source.resolve_credentials("bitvavo");
+        assert_eq!(key, None);
+        assert_eq!(secret, None);
+    }
+
+    #[test]
+    fn resolve_credentials_ignores_env_for_non_bitvavo() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        set_env("BITVAVO_API_KEY", "should-not-apply");
+        set_env("BITVAVO_API_SECRET", "should-not-apply");
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-USDT".into(),
+            data_kind: "both".into(),
+            ..Default::default()
+        };
+        let (key, secret) = source.resolve_credentials("okx");
+        remove_env("BITVAVO_API_KEY");
+        remove_env("BITVAVO_API_SECRET");
+        assert_eq!(key, None);
+        assert_eq!(secret, None);
+    }
+
+    #[test]
+    fn resolve_credentials_config_takes_precedence_over_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        set_env("BITVAVO_API_KEY", "env-key");
+        set_env("BITVAVO_API_SECRET", "env-secret");
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-EUR".into(),
+            data_kind: "both".into(),
+            api_key: Some("config-key".into()),
+            api_secret: Some("config-secret".into()),
+            ..Default::default()
+        };
+        let (key, secret) = source.resolve_credentials("bitvavo");
+        remove_env("BITVAVO_API_KEY");
+        remove_env("BITVAVO_API_SECRET");
+        assert_eq!(key, Some("config-key".into()));
+        assert_eq!(secret, Some("config-secret".into()));
+    }
+
+    #[test]
+    fn to_data_source_forwards_api_credentials() {
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-EUR".into(),
+            data_kind: "both".into(),
+            api_key: Some("my-key".into()),
+            api_secret: Some("my-secret".into()),
+            ..Default::default()
+        };
+        let data_source = source.to_data_source("bitvavo").unwrap();
+        assert_eq!(data_source.api_key, Some("my-key".into()));
+        assert_eq!(data_source.api_secret, Some("my-secret".into()));
+    }
+
+    #[test]
+    fn to_data_source_sets_credentials_none_for_okx() {
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-USDT".into(),
+            data_kind: "lob".into(),
+            ..Default::default()
+        };
+        let data_source = source.to_data_source("okx").unwrap();
+        assert_eq!(data_source.api_key, None);
+        assert_eq!(data_source.api_secret, None);
+    }
+
+    #[test]
+    fn bitvavo_without_credentials_fails_validation() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        remove_env("BITVAVO_API_KEY");
+        remove_env("BITVAVO_API_SECRET");
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-EUR".into(),
+            data_kind: "both".into(),
+            ..Default::default()
+        };
+        let result = source.to_data_source("bitvavo");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("bitvavo requires api_key and api_secret")
+        );
+    }
+
+    #[test]
+    fn bitvavo_with_credentials_passes_validation() {
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-EUR".into(),
+            data_kind: "both".into(),
+            api_key: Some("my-key".into()),
+            api_secret: Some("my-secret".into()),
+            ..Default::default()
+        };
+        let result = source.to_data_source("bitvavo");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn bitvavo_with_env_credentials_passes_validation() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        set_env("BITVAVO_API_KEY", "env-key");
+        set_env("BITVAVO_API_SECRET", "env-secret");
+        let source = SourceConfig {
+            region: "global".into(),
+            instrument: "BTC-EUR".into(),
+            data_kind: "both".into(),
+            ..Default::default()
+        };
+        let result = source.to_data_source("bitvavo");
+        remove_env("BITVAVO_API_KEY");
+        remove_env("BITVAVO_API_SECRET");
+        assert!(result.is_ok());
+        let ds = result.unwrap();
+        assert_eq!(ds.api_key, Some("env-key".into()));
+        assert_eq!(ds.api_secret, Some("env-secret".into()));
+    }
+
+    #[test]
+    fn parses_bitvavo_config_from_toml() {
+        let toml = r#"
+[source.bitvavo]
+region = "global"
+instrument = "BTC-EUR"
+data_kind = "both"
+api_key = "toml-key"
+api_secret = "toml-secret"
+suffix_topic = "btceur"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let sources = config.validated_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        let (_, _, data_source, _) = &sources[0];
+        assert_eq!(data_source.exchange, "bitvavo");
+        assert_eq!(data_source.api_key, Some("toml-key".into()));
+        assert_eq!(data_source.api_secret, Some("toml-secret".into()));
     }
 }
