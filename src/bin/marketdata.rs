@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use criptomeria_marketdata::broker::Broker;
 use criptomeria_marketdata::config::parse_config;
+use criptomeria_marketdata::env::load_env;
 use criptomeria_marketdata::forward::{build_payload, topic_for};
 use criptomeria_marketdata::subscriber::StdoutSubscriber;
 use cryptomeria_ingest as ingest;
@@ -100,6 +101,7 @@ async fn run_exchange(
 #[tokio::main]
 async fn main() -> Result<()> {
     init_logger();
+    load_env();
     let cli = Cli::parse();
 
     let content = std::fs::read_to_string(&cli.config)
