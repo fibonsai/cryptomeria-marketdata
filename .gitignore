@@ -30,6 +30,7 @@ data/**/*
 *.svg
 
 # Environment
+.env
 .env.local
 .env.local.**/*
 

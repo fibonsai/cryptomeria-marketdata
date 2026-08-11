@@ -40,11 +40,12 @@ over a TCP socket using NNG pub/sub.
 **ALWAYS load `rust-coding` and `rust-tdd` skills before create or update tests.**
 
 ## Project Structure
-- `src/lib.rs` — Library exports (`config`, `forward`, `broker`, `subscriber`)
+- `src/lib.rs` — Library exports (`config`, `forward`, `broker`, `subscriber`, `env`)
 - `src/config.rs` — Application configuration parsing/validation
 - `src/forward.rs` — Pure helpers: topic construction, JSON payload building, frame splitting, log entry building (`build_log_entry`)
 - `src/broker.rs` — NNG PUB broker + dedicated sender thread
 - `src/subscriber.rs` — Built-in NNG SUB log subscriber
+- `src/env.rs` — Best-effort `.env` file loading at startup
 - `src/bin/marketdata.rs` — CLI entry point; spawns one parallel per-exchange task (`JoinSet`) sharing the broker
 - `config.toml` — Default configuration
 - `docs/adr/Core Architecture/` — Architecture decision records
@@ -75,6 +76,7 @@ over a TCP socket using NNG pub/sub.
 
 ## Configuration
 - See `src/config.rs` for `AppConfig`, `SourceConfig`, `NngConfig`
+- A `.env` file is loaded at startup (best-effort) via `dotenvy`; see `src/env.rs` and ADR-012
 - Supported exchanges: "okx", "kraken", "bitstamp", "bitvavo"
 - Data kinds: "lob", "trade", "both", "lob|trade"
 - Resilience settings: initial_backoff_ms, max_backoff_ms, backoff_multiplier, jitter_ms, heartbeat_interval_secs, max_attempts
@@ -84,7 +86,7 @@ over a TCP socket using NNG pub/sub.
 - Multiple `[source.*]` sections are all consumed in parallel (one task per exchange); a single `SourceConfig` is still accepted and behaves exactly as before
 
 ## Adding Tests
-- Unit tests live in `#[cfg(test)] mod tests` blocks in `config.rs` and `forward.rs`
+- Unit tests live in `#[cfg(test)] mod tests` blocks alongside source (e.g. `config.rs`, `forward.rs`, `broker.rs`, `subscriber.rs`, `env.rs`)
 - Follow AAA pattern (Arrange/Act/Assert)
 - Name tests to describe behavior, not implementation
 - For new pure functions: write failing test first (RED), minimal code (GREEN), refactor (REFACTOR)

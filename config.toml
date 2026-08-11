@@ -1,5 +1,11 @@
 # cryptomeria-marketdata configuration
 # See cryptomeria-ingest README for fallback/alias details.
+#
+# Environment variables:
+# The app automatically loads a .env file at startup (if present).
+# Place secrets such as BITVAVO_API_KEY and BITVAVO_API_SECRET in .env
+# (which is git-ignored) instead of config.toml. Config.toml values
+# take precedence over environment variables.
 
 [source.okx]
 # Region: "global" or "europe" (affects WS/REST endpoints)
