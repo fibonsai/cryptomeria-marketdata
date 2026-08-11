@@ -165,8 +165,5 @@ case_fallback = "lower"
 # max_attempts = 0
 
 [nng]
-
-
-[nng]
 # TCP port for the NNG PUB broker
 port = 14242
