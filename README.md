@@ -2,7 +2,8 @@
 
 A Rust application that subscribes to limit order book (LOB) and trade
 market data from multiple crypto exchanges (OKX, Kraken, Bitstamp, Bitvavo) via
-[`cryptomeria-ingest`](https://github.com/fibonsai/cryptomeria-ingest) and forwards the normalized events to subscribers over a TCP socket using
+[`cryptomeria-ingest`](https://github.com/fibonsai/cryptomeria-ingest) 
+and forwards the normalized events to subscribers over a TCP socket using
 [NNG](https://nng.nanomsg.org/) pub/sub.
 
 ## Features
