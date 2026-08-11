@@ -75,7 +75,7 @@ over a TCP socket using NNG pub/sub.
 
 ## Configuration
 - See `src/config.rs` for `AppConfig`, `SourceConfig`, `NngConfig`
-- Supported exchanges: "okx", "kraken", "bitstamp"
+- Supported exchanges: "okx", "kraken", "bitstamp", "bitvavo"
 - Data kinds: "lob", "trade", "both", "lob|trade"
 - Resilience settings: initial_backoff_ms, max_backoff_ms, backoff_multiplier, jitter_ms, heartbeat_interval_secs, max_attempts
 - Instrument fallback: `alias` (optional) selects a per-exchange fallback mapping under `[source.<exchange>.fallback.<alias>]`; `fallback` maps alias → `ExchangeFallbackMapping` (base/quote/separator/case) within each `[source.<exchange>]` section

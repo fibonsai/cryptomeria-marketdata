@@ -1,14 +1,13 @@
 # criptomeria-marketdata
 
 A Rust application that subscribes to limit order book (LOB) and trade
-market data from multiple crypto exchanges (OKX, Kraken, Bitstamp) via
-[`cryptomeria-ingest`](https://github.com/fibonsai/cryptomeria-ingest)
-and forwards the normalized events to subscribers over a TCP socket using
+market data from multiple crypto exchanges (OKX, Kraken, Bitstamp, Bitvavo) via
+[`cryptomeria-ingest`](https://github.com/fibonsai/cryptomeria-ingest) and forwards the normalized events to subscribers over a TCP socket using
 [NNG](https://nng.nanomsg.org/) pub/sub.
 
 ## Features
 
-- Multi-exchange support through `cryptomeria-ingest` (OKX, Kraken, Bitstamp)
+- Multi-exchange support through `cryptomeria-ingest` (OKX, Kraken, Bitstamp, Bitvavo)
 - Normalized LOB snapshots/updates and trade executions
 - NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
 - Dynamic per-item topics named `{type}__{instrument}` (e.g. `lob__btcusd`,
@@ -176,6 +175,7 @@ See the architecture decision records:
 - `docs/adr/Core Architecture/ADR-008-...-add-suffix-topic-config-field.md`
    - `docs/adr/Core Architecture/ADR-009-...-migrate-logging-from-tracing-to-rasant.md`
    - `docs/adr/Core Architecture/ADR-010-...-migrate-logging-from-rasant-to-log-env_logger.md`
+   - `docs/adr/Integration/ADR-011-...-bitvavo-credential-resolution.md`
 
 ## License
 

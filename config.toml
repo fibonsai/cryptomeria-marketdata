@@ -130,6 +130,41 @@ quote_mappings = ["USDT", "USDC", "USD"]
 separator_mappings = ["-", "/", ""]
 case_fallback = "lower"
 
+# Bitvavo (requires WebSocket authentication credentials)
+#
+# Bitvavo's Market Data Pro WebSocket feed requires an API key and secret for
+# authentication. These can be provided in config.toml as strings, or — when
+# omitted — read from environment variables BITVAVO_API_KEY and
+# BITVAVO_API_SECRET. Config values take precedence over env vars.
+#
+# Instrument symbols use Bitvavo's market format, e.g. "BTC-EUR", "ETH-EUR".
+
+# [source.bitvavo]
+# region = "global"
+# instrument = "BTC-EUR"
+# data_kind = "both"
+# suffix_topic = "btceur"
+# max_level = 3
+# max_level_pct = 0.0
+#
+# Option A: credentials inline in config.toml
+# api_key = "your-bitvavo-api-key"
+# api_secret = "your-bitvavo-api-secret"
+#
+# Option B: credentials from environment variables (BITVAVO_API_KEY /
+# BITVAVO_API_SECRET) — omit api_key/api_secret above and set the env vars:
+# export BITVAVO_API_KEY="your-bitvavo-api-key"
+# export BITVAVO_API_SECRET="your-bitvavo-api-secret"
+#
+# [source.bitvavo.resilience]
+# initial_backoff_ms = 1000
+# max_backoff_ms = 60000
+# backoff_multiplier = 2.0
+# jitter_ms = 1000
+# heartbeat_interval_secs = 0
+# max_attempts = 0
+
+[nng]
 
 
 [nng]
