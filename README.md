@@ -61,7 +61,7 @@ empty prefix to receive every topic.
 ## Configuration
 
 > [!TIP]
-> Use `config.toml.example` as base.
+> Copy config.toml.example to create your config.toml file.
 
 Edit `config.toml` (see the example file):
 
