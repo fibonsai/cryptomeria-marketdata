@@ -9,7 +9,7 @@
 
 [source.okx]
 # Region: "global" or "europe" (affects WS/REST endpoints)
-region = "global"
+region = "europe"
 # Instrument symbol in exchange-native format
 #   OKX:      "BTC-USDT",  Kraken: "XBT/USD",  Bitstamp: "BTC/USD"
 instrument = "btcusd"
@@ -57,7 +57,7 @@ max_attempts = 0
 #
 [source.okx.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]
-quote_mappings = ["USDT", "USD"]
+quote_mappings = ["USDC", "USDT", "USD"]
 separator_mappings = ["-", "/"]
 case_fallback = "upper"
 #
@@ -103,7 +103,7 @@ max_attempts = 0
 
 [source.kraken.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]
-quote_mappings = ["USDT", "USDC", "USD"]
+quote_mappings = ["USDC", "USDT", "USD"]
 separator_mappings = ["-", "/", ""]
 case_fallback = "upper"
 
@@ -165,7 +165,7 @@ max_level_pct = 0.0
 
 [source.bitvavo.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]
-quote_mappings = ["USDC", "USDT"]
+quote_mappings = ["USDC", "USDT", "USD"]
 separator_mappings = ["-", "/"]
 case_fallback = "upper"
 
