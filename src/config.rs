@@ -86,6 +86,13 @@ pub struct SourceConfig {
     pub max_level: Option<usize>,
     #[serde(default)]
     pub max_level_pct: f64,
+    /// When `true`, emit a warning log on Kraken CRC32 checksum mismatch
+    /// (in addition to the always-set `checksum_failed` flag). When `false`
+    /// (the default), a mismatch is only logged at the runtime `DEBUG` level.
+    /// Gating this prevents an exchange feed from injecting log lines that
+    /// interpolate an exchange-controlled checksum value.
+    #[serde(default)]
+    pub checksum_log: bool,
     #[serde(default)]
     pub resilience: ResilienceConfig,
     /// Per-alias fallback mappings for this exchange, keyed by instrument
@@ -197,6 +204,7 @@ impl SourceConfig {
             alias: self.alias.clone(),
             max_level: self.max_level,
             max_level_pct: self.max_level_pct,
+            checksum_log: self.checksum_log,
             resilience: self.resilience.clone(),
             fallback: HashMap::from([(exchange.to_string(), self.fallback.clone())]),
             api_key,
@@ -903,5 +911,76 @@ port = 14242
         assert_eq!(data_source.exchange, "bitvavo");
         assert_eq!(data_source.api_key, Some("toml-key".into()));
         assert_eq!(data_source.api_secret, Some("toml-secret".into()));
+    }
+
+    #[test]
+    fn checksum_log_defaults_to_false_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        let source = config.source.get("okx").unwrap();
+        assert!(!source.checksum_log, "checksum_log must default to false");
+    }
+
+    #[test]
+    fn parses_checksum_log_when_present() {
+        let toml = r#"
+[source.kraken]
+region = "global"
+instrument = "btcusd"
+data_kind = "both"
+alias = "btcusd"
+suffix_topic = "btcusd"
+checksum_log = true
+max_level = 3
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("kraken").unwrap();
+        assert!(
+            source.checksum_log,
+            "checksum_log must parse as true from TOML"
+        );
+    }
+
+    #[test]
+    fn to_data_source_forwards_checksum_log() {
+        let toml = r#"
+[source.kraken]
+region = "global"
+instrument = "btcusd"
+data_kind = "both"
+alias = "btcusd"
+suffix_topic = "btcusd"
+checksum_log = true
+max_level = 3
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let sources = config.validated_sources().unwrap();
+        let kraken = sources
+            .iter()
+            .find(|(e, _, _, _)| *e == "kraken")
+            .expect("kraken should be present");
+        assert!(
+            kraken.2.checksum_log,
+            "checksum_log must be forwarded to DataSourceConfig"
+        );
+    }
+
+    #[test]
+    fn to_data_source_checksum_log_defaults_to_false_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        let sources = config.validated_sources().unwrap();
+        let okx = sources
+            .iter()
+            .find(|(e, _, _, _)| *e == "okx")
+            .expect("okx should be present");
+        assert!(
+            !okx.2.checksum_log,
+            "checksum_log must default to false in DataSourceConfig when omitted"
+        );
     }
 }

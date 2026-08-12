@@ -29,6 +29,11 @@ data_kind = "both"
 max_level = 3
 # Max percentage from best price (0.0 = no limit; conflicts with max_level)
 max_level_pct = 0.0
+# When true, emit a warning log on Kraken CRC32 checksum mismatch (in
+# addition to the always-set checksum_failed flag). When false (default),
+# a mismatch is only logged at DEBUG level. Prevents an exchange feed
+# from injecting log lines that interpolate an exchange-controlled value.
+# checksum_log = true
 
 [source.okx.resilience]
 # Initial backoff in milliseconds
@@ -88,6 +93,7 @@ suffix_topic = "btcusd"
 data_kind = "both"
 max_level = 3
 max_level_pct = 0.0
+# checksum_log = true
 
 [source.kraken.resilience]
 initial_backoff_ms = 1000
