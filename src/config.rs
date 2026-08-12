@@ -93,6 +93,17 @@ pub struct SourceConfig {
     /// interpolate an exchange-controlled checksum value.
     #[serde(default)]
     pub checksum_log: bool,
+    /// When `true`, emit a warning log on Kraken crossing-guard rejection
+    /// (an update whose price would cross the book: ask ≤ best bid or
+    /// bid ≥ best ask, Kraken only). When `false` (the default), such
+    /// rejections are only logged at the runtime `DEBUG` level. The
+    /// crossing guard **always** drops the crossed level regardless of
+    /// this setting — only the diagnostic `warn!` is gated. Gating prevents
+    /// an exchange feed from generating noisy/spoofed log lines via the
+    /// exchange-controlled update price; see
+    /// [ADR-022](https://github.com/fibonsai/cryptomeria-ingest/blob/main/docs/adr/Operations/ADR-022-20260812-gate-crossing-guard-logging-prevent-log-spoofing.md).
+    #[serde(default)]
+    pub crossguard_log: bool,
     #[serde(default)]
     pub resilience: ResilienceConfig,
     /// Per-alias fallback mappings for this exchange, keyed by instrument
@@ -205,6 +216,7 @@ impl SourceConfig {
             max_level: self.max_level,
             max_level_pct: self.max_level_pct,
             checksum_log: self.checksum_log,
+            crossguard_log: self.crossguard_log,
             resilience: self.resilience.clone(),
             fallback: HashMap::from([(exchange.to_string(), self.fallback.clone())]),
             api_key,
@@ -981,6 +993,80 @@ port = 14242
         assert!(
             !okx.2.checksum_log,
             "checksum_log must default to false in DataSourceConfig when omitted"
+        );
+    }
+
+    #[test]
+    fn crossguard_log_defaults_to_false_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        let source = config.source.get("okx").unwrap();
+        assert!(
+            !source.crossguard_log,
+            "crossguard_log must default to false"
+        );
+    }
+
+    #[test]
+    fn parses_crossguard_log_when_present() {
+        let toml = r#"
+[source.kraken]
+region = "global"
+instrument = "btcusd"
+data_kind = "both"
+alias = "btcusd"
+suffix_topic = "btcusd"
+crossguard_log = true
+max_level = 3
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("kraken").unwrap();
+        assert!(
+            source.crossguard_log,
+            "crossguard_log must parse as true from TOML"
+        );
+    }
+
+    #[test]
+    fn to_data_source_forwards_crossguard_log() {
+        let toml = r#"
+[source.kraken]
+region = "global"
+instrument = "btcusd"
+data_kind = "both"
+alias = "btcusd"
+suffix_topic = "btcusd"
+crossguard_log = true
+max_level = 3
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let sources = config.validated_sources().unwrap();
+        let kraken = sources
+            .iter()
+            .find(|(e, _, _, _)| *e == "kraken")
+            .expect("kraken should be present");
+        assert!(
+            kraken.2.crossguard_log,
+            "crossguard_log must be forwarded to DataSourceConfig"
+        );
+    }
+
+    #[test]
+    fn to_data_source_crossguard_log_defaults_to_false_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        let sources = config.validated_sources().unwrap();
+        let okx = sources
+            .iter()
+            .find(|(e, _, _, _)| *e == "okx")
+            .expect("okx should be present");
+        assert!(
+            !okx.2.crossguard_log,
+            "crossguard_log must default to false in DataSourceConfig when omitted"
         );
     }
 }
