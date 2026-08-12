@@ -71,3 +71,6 @@ cobertura.xml
 # Ignore TODO temp file
 TODO
 .worktrees/
+
+# ignore config.toml
+config.toml

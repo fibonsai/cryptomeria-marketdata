@@ -28,6 +28,9 @@ and forwards the normalized events to subscribers over a TCP socket using
 # Build
 cargo build --release
 
+# Use config example and adjust
+cp config.toml.example config.toml
+
 # Run the NNG broker + connect to the exchange WS stream
 ./target/release/marketdata --config config.toml
 
@@ -56,6 +59,8 @@ empty prefix to receive every topic.
 | `--test-timeout-secs <secs>` | Exit automatically after this many seconds (`0` = no timeout; intended for tests/CI) |
 
 ## Configuration
+
+> [!NOTE] Use `config.toml.example` as base.
 
 Edit `config.toml` (see the example file):
 
