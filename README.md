@@ -157,8 +157,8 @@ BITVAVO_API_SECRET=your-bitvavo-api-secret
 
 Multiple exchanges run in parallel. Add more `[source.<exchange>]` sections and
 each is consumed by its own independent background task, all publishing to the
-shared NNG broker. **Topics are `{type}__{instrument}` only — the exchange is not
-part of the topic** — so use distinct instruments per exchange to avoid collisions.
+shared NNG broker.
+**Topics are `{type}__{instrument|suffix_topic}` — the exchange is defined in json payload.**
 
 When the default normalized instrument is not sufficient (e.g. two exchanges
 share the same instrument symbol), set `suffix_topic` to a verbatim string that
