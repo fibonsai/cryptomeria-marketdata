@@ -72,5 +72,5 @@ cobertura.xml
 TODO
 .worktrees/
 
-# ignore config.toml
-config.toml
+# ignore configs
+*.toml
