@@ -3,9 +3,9 @@ name = "criptomeria-marketdata"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Rust app that subscribes to LOB/trade market data via cryptomeria-ingest and forwards it to a NATS broker"
-repository = "https://github.com/fibonsai/criptomeria-marketdata"
-keywords = ["crypto", "market-data", "nats", "order-book", "trades"]
+description = "Rust app that subscribes to LOB/trade market data via cryptomeria-ingest and forwards it to an NNG TCP pub/sub broker"
+repository = "https://github.com/fibonsai/cryptomeria-marketdata"
+keywords = ["crypto", "market-data", "nng", "order-book", "trades"]
 
 [dependencies]
 cryptomeria-ingest = { git = "https://github.com/fibonsai/cryptomeria-ingest", branch = "main" }

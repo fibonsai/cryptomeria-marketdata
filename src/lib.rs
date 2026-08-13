@@ -1,4 +1,4 @@
-//! criptomeria-marketdata — LOB/trade ingestion forwarded to NNG subscribers.
+//! cryptomeria-marketdata — LOB/trade ingestion forwarded to NNG subscribers.
 //!
 //! This library exposes the configuration model, NNG broker/subscriber helpers
 //! and the pure forwarding functions used by the `marketdata` binary. It
