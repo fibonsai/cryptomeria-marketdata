@@ -12,13 +12,14 @@ and forwards the normalized events to subscribers over a TCP socket using
 - Normalized LOB snapshots/updates and trade executions
 - NNG PUB/SUB broker on `tcp://0.0.0.0:14242` with native topic filtering
 - Dynamic per-item topics named `{type}__{instrument}` (e.g. `lob__btcusd`,
-  `trade__btcusd`), with optional `suffix_topic` override per exchange
+  `trade__btcusd`), with optional `suffix_topic` override per instrument
 - Payload JSON preserved exactly as received from `cryptomeria-ingest`
 - Built-in log subscriber (gated by `--data-out`) that connects locally
   and logs every topic to stdout as structured JSON:
   `{"topic":"...","payload":{...}}`
 - Async logging via `env_logger` behind the `log` facade (no `println!`); controlled by `RUST_LOG`
-- Configurable depth, level filtering, resilience (exponential backoff + jitter), and instrument fallback
+- Configurable depth, level filtering, resilience (exponential backoff + jitter), and instrument fallback;
+  supports multiple instruments per exchange under `[source.<exchange>.instrument.<alias>]`
 - Dry-run mode for local testing
 - Graceful shutdown on Ctrl+C, with `--test-timeout-secs` for CI
 
@@ -69,12 +70,19 @@ Edit `config.toml` (see the example file):
 [source.okx]
 # The section name "okx" is the exchange id; there is no `exchange` field.
 region = "global"          # global | europe
-instrument = "BTC-USDT"    # exchange-native symbol
-# alias = "btcusd"         # optional: selects a per-exchange fallback mapping
 data_kind = "both"         # lob | trade | both | lob|trade
+
+# Instruments are configured under [source.<exchange>.instrument.<alias>].
+# The <alias> key is used to look up the matching fallback mapping under
+# [source.<exchange>.fallback.<alias>]. An empty-string alias ("") selects
+# the exchange-only fallback rule.
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"    # exchange-native symbol
+suffix_topic = "okx_btcusd"  # optional: verbatim topic suffix (no normalization)
 max_level = 10             # optional: limit order book depth per side
 max_level_pct = 0.0        # optional: max % from best price (conflicts with max_level)
-# suffix_topic = "okx_btcusd"  # optional: verbatim topic suffix (no normalization)
+# checksum_log = true      # optional: warn on Kraken checksum mismatch (default false)
+# crossguard_log = true    # optional: warn on Kraken crossing-guard rejection (default false)
 
 [source.okx.resilience]
 initial_backoff_ms = 1000
@@ -108,13 +116,17 @@ becomes the topic segment: `{type}__{suffix_topic}`.
 ```toml
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "trade"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 
 [source.kraken]
 region = "global"
-instrument = "XBT/USD"
 data_kind = "trade"
+
+[source.kraken.instrument.btcusd]
+instrument = "XBT/USD"
 
 [nng]
 port = 14242
@@ -180,9 +192,12 @@ See the architecture decision records:
 - `docs/adr/Core Architecture/ADR-006-...-restructure-config-schema-to-use-exchange-id-as-subkey.md`
 - `docs/adr/Core Architecture/ADR-007-...-multi-exchange-parallel-ingestion.md`
 - `docs/adr/Core Architecture/ADR-008-...-add-suffix-topic-config-field.md`
-   - `docs/adr/Core Architecture/ADR-009-...-migrate-logging-from-tracing-to-rasant.md`
-   - `docs/adr/Core Architecture/ADR-010-...-migrate-logging-from-rasant-to-log-env_logger.md`
-   - `docs/adr/Integration/ADR-011-...-bitvavo-credential-resolution.md`
+- `docs/adr/Core Architecture/ADR-009-...-migrate-logging-from-tracing-to-rasant.md`
+- `docs/adr/Core Architecture/ADR-010-...-migrate-logging-from-rasant-to-log-envlogger.md`
+- `docs/adr/Integration/ADR-011-...-bitvavo-credential-resolution.md`
+- `docs/adr/Core Architecture/ADR-012-...-env-file-loading.md`
+- `docs/adr/Core Architecture/ADR-013-...-expose-crossguard-log-config.md`
+- `docs/adr/Core Architecture/ADR-014-...-support-multi-instruments-per-exchange.md`
 
 ## License
 

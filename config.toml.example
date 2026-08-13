@@ -6,25 +6,30 @@
 # Place secrets such as BITVAVO_API_KEY and BITVAVO_API_SECRET in .env
 # (which is git-ignored) instead of config.toml. Config.toml values
 # take precedence over environment variables.
+#
+# Each exchange can configure multiple instruments under
+# [source.<exchange>.instrument.<alias>]. The <alias> key doubles as
+# the fallback lookup key into [source.<exchange>.fallback.<alias>].
+# See docs/adr/Core Architecture/ADR-014-... for details.
+
+# OKX
 
 [source.okx]
 # Region: "global" or "europe" (affects WS/REST endpoints)
 region = "europe"
+# Data to subscribe to: "lob", "trade", "both", or "lob|trade"
+data_kind = "both"
+
+[source.okx.instrument.btcusd]
 # Instrument symbol in exchange-native format
 #   OKX:      "BTC-USDT",  Kraken: "XBT/USD",  Bitstamp: "BTC/USD"
 instrument = "btcusd"
-# Optional alias used to select a per-exchange fallback mapping
-# under `[source.okx.fallback.<alias>]`. Only needed when the
-# primary instrument symbol is not recognized by the exchange.
-alias = "btcusd"
 # Optional suffix to override the normalized instrument name in NNG
 # topic names. When set, topics use `{kind}__{suffix}` verbatim
 # (no normalization), enabling cross-exchange disambiguation since
 # the exchange is NOT part of the topic. Leave empty/commented to
 # use the normalized instrument (e.g. `btcusd` from `BTC-USDT`).
 suffix_topic = "btcusd"
-# Data to subscribe to: "lob", "trade", "both", or "lob|trade"
-data_kind = "both"
 # Max number of price levels per side (None = no limit)
 max_level = 3
 # Max percentage from best price (0.0 = no limit; conflicts with max_level)
@@ -53,29 +58,17 @@ max_attempts = 0
 # and reconnected. 0 or omitted = no silence detection.
 # silence_timeout_secs = 30
 
-# [source.okx.fallback]
-# Per-exchange fallback mappings for auto-resolving instrument symbol variants.
+# Optional: instrument symbol fallback. See cryptomeria-ingest README.
 # The structure is: within source.okx, fallback is keyed by instrument alias.
-# See the cryptomeria-ingest README "Instrument Validation and Fallback" section.
 #
-# Uncomment and tune the block below to enable symbol fallback for OKX:
-#
-[source.okx.fallback.btcusd]
-base_mappings = ["BTC", "XBT"]
-quote_mappings = ["USDC", "USDT", "USD"]
-separator_mappings = ["-", "/"]
-case_fallback = "upper"
+# [source.okx.fallback.btcusd]
+# base_mappings = ["BTC", "XBT"]
+# quote_mappings = ["USDC", "USDT", "USD"]
+# separator_mappings = ["-", "/"]
+# case_fallback = "upper"
 #
 # Example: instrument "btc/usdt" first tries "BTC/USDT", then
-# "BTC-USDT", "BTC/USD", "XBT-USDT", etc. until one is accepted by OKX.
-
-# Exchange-only fallback (used when `alias` is omitted or no alias matches):
-#
-  # [source.okx.fallback.""]
-  # base_mappings = ["BTC"]
-  # quote_mappings = ["USDT"]
-  # separator_mappings = ["-"]
-  # case_fallback = "upper"
+# "BTCUSDT-USDT", "BTC-USD", "XBT-USDT", etc. until one is accepted by OKX.
 
 # When more than one exchange is configured, each runs in its own parallel
 # stream and publishes to the shared NNG broker. Topics are keyed by
@@ -87,10 +80,11 @@ case_fallback = "upper"
 
 [source.kraken]
 region = "global"
-instrument = "btcusd"
-alias = "btcusd"
-suffix_topic = "btcusd"
 data_kind = "both"
+
+[source.kraken.instrument.btcusd]
+instrument = "btcusd"
+suffix_topic = "btcusd"
 max_level = 3
 max_level_pct = 0.0
 # checksum_log = true
@@ -117,10 +111,11 @@ case_fallback = "upper"
 ##
 ##[source.bitstamp]
 ##region = "global"
-##instrument = "btcusd"
-##alias = "btcusd"
-##suffix_topic = "btcusd"
 ##data_kind = "both"
+##
+##[source.bitstamp.instrument.btcusd]
+##instrument = "btcusd"
+##suffix_topic = "btcusd"
 ##max_level = 3
 ##max_level_pct = 0.0
 ##
@@ -153,13 +148,7 @@ case_fallback = "upper"
 
 [source.bitvavo]
 region = "europe"
-instrument = "btcusd"
-alias = "btcusd"
-suffix_topic = "btcusd"
 data_kind = "both"
-max_level = 3
-max_level_pct = 0.0
-
 # Option A: credentials inline in config.toml
 # api_key = "your-bitvavo-api-key"
 # api_secret = "your-bitvavo-api-secret"
@@ -168,6 +157,12 @@ max_level_pct = 0.0
 # BITVAVO_API_SECRET) — omit api_key/api_secret above and set the env vars:
 # export BITVAVO_API_KEY="your-bitvavo-api-key"
 # export BITVAVO_API_SECRET="your-bitvavo-api-secret"
+
+[source.bitvavo.instrument.btcusd]
+instrument = "btcusd"
+suffix_topic = "btcusd"
+max_level = 3
+max_level_pct = 0.0
 
 [source.bitvavo.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]

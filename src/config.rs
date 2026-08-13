@@ -33,26 +33,34 @@ impl AppConfig {
         Ok(entries)
     }
 
-    /// Build a validated `DataSourceConfig` for every configured exchange.
+    /// Build a validated `DataSourceConfig` for every configured instrument
+    /// across all exchanges.
     ///
-    /// Returns `ValidatedSource` tuples sorted by exchange
-    /// id. The suffix is `None` when not configured. Validation is local
-    /// (exchange/region/kind checks only); instrument resolution against each
-    /// exchange still happens inside `ingest::stream`. This lets the caller
-    /// fail fast on bad configs before binding the broker.
+    /// Returns `ValidatedSource` tuples sorted by `(exchange, alias)`. The
+    /// suffix is `None` when not configured for a given instrument. Validation
+    /// is local (exchange/region/kind checks only); instrument resolution
+    /// against each exchange still happens inside `ingest::stream`. This lets
+    /// the caller fail fast on bad configs before binding the broker.
+    ///
+    /// Each instrument under `[source.<exchange>.instrument.<alias>]` produces
+    /// one `ValidatedSource`, enabling multiple instruments per exchange.
     pub fn validated_sources(&self) -> Result<Vec<ValidatedSource>, ConfigError> {
-        self.exchange_sources()?
-            .into_iter()
-            .map(|(exchange, source)| {
-                let data_source = source.to_data_source(exchange)?;
-                Ok((
+        let mut results = Vec::new();
+        for (exchange, source) in self.exchange_sources()? {
+            let mut instrument_entries: Vec<(&String, &InstrumentConfig)> =
+                source.instruments.iter().collect();
+            instrument_entries.sort_by_key(|(alias, _)| *alias);
+            for (alias, instrument_cfg) in instrument_entries {
+                let data_source = source.to_data_source(exchange, alias, instrument_cfg)?;
+                results.push((
                     exchange.clone(),
-                    source.instrument.clone(),
+                    instrument_cfg.instrument.clone(),
                     data_source,
-                    source.suffix_topic.clone(),
-                ))
-            })
-            .collect()
+                    instrument_cfg.suffix_topic.clone(),
+                ));
+            }
+        }
+        Ok(results)
     }
 
     /// Override `silence_timeout_secs` on every configured source.
@@ -70,22 +78,46 @@ impl AppConfig {
     }
 }
 
+/// Per-instrument configuration within an exchange source.
+///
+/// Each instrument is configured under
+/// `[source.<exchange>.instrument.<alias>]`. The `<alias>` key (the
+/// `HashMap` key, not a field) doubles as the `DataSourceConfig.alias` value
+/// and as the lookup key into the sibling
+/// `[source.<exchange>.fallback.<alias>]` section.
+///
+/// Using an empty-string alias key (`[source.<exchange>.instrument.""]`)
+/// selects the exchange-only fallback rule (i.e. `alias = None` in the
+/// underlying `DataSourceConfig`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct InstrumentConfig {
+    /// Instrument symbol in exchange-native format.
+    pub instrument: String,
+    /// Optional suffix to override the normalized instrument name in NNG
+    /// topic names. When `Some(value)`, topics use `{kind}__{value}`
+    /// verbatim (no normalization); when `None`/absent, topics use the
+    /// normalized instrument `{kind}__{normalized}` as before.
+    #[serde(default)]
+    pub suffix_topic: Option<String>,
+    /// Maximum number of price levels per side (None = no limit).
+    #[serde(default)]
+    pub max_level: Option<usize>,
+    /// Maximum percentage from best price (0.0 or 100.0 = no limit; all
+    /// levels kept).
+    #[serde(default)]
+    pub max_level_pct: f64,
+}
+
 /// Exchange WebSocket subscription settings.
+///
+/// Exchange-level fields (region, data kind, credentials, log gating,
+/// resilience, fallback mappings) are shared by all instruments configured
+/// under `[source.<exchange>.instrument.<alias>]`.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SourceConfig {
     pub region: String,
-    pub instrument: String,
-    /// Optional alias used to select a per-exchange fallback mapping
-    /// under `[source.<exchange>.fallback.<alias>]`. Defaults to the
-    /// exchange-only rule.
-    #[serde(default)]
-    pub alias: Option<String>,
     /// One of "lob", "trade", "both", "lob|trade".
     pub data_kind: String,
-    #[serde(default)]
-    pub max_level: Option<usize>,
-    #[serde(default)]
-    pub max_level_pct: f64,
     /// When `true`, emit a warning log on Kraken CRC32 checksum mismatch
     /// (in addition to the always-set `checksum_failed` flag). When `false`
     /// (the default), a mismatch is only logged at the runtime `DEBUG` level.
@@ -107,15 +139,11 @@ pub struct SourceConfig {
     #[serde(default)]
     pub resilience: ResilienceConfig,
     /// Per-alias fallback mappings for this exchange, keyed by instrument
-    /// alias. See `cryptomeria-ingest` README for details.
+    /// alias. The alias key matches the key under
+    /// `[source.<exchange>.instrument.<alias>]`. See `cryptomeria-ingest`
+    /// README for details.
     #[serde(default)]
     pub fallback: HashMap<String, ExchangeFallbackMapping>,
-    /// Optional suffix to override the normalized instrument name in NNG
-    /// topic names. When `Some(value)`, topics use `{kind}__{value}`
-    /// verbatim (no normalization); when `None`/absent, topics use the
-    /// normalized instrument `{kind}__{normalized}` as before.
-    #[serde(default)]
-    pub suffix_topic: Option<String>,
     /// Optional API key for exchanges that require WebSocket authentication
     /// (e.g. Bitvavo). Ignored by exchanges that do not require credentials.
     #[serde(default)]
@@ -124,6 +152,13 @@ pub struct SourceConfig {
     /// (e.g. Bitvavo). Ignored by exchanges that do not require credentials.
     #[serde(default)]
     pub api_secret: Option<String>,
+    /// Per-instrument configs, keyed by alias. Each instrument is subscribed
+    /// independently and gets its own `ValidatedSource`. The alias key also
+    /// selects the matching `[source.<exchange>.fallback.<alias>]` mapping.
+    ///
+    /// In TOML this is `[source.<exchange>.instrument.<alias>]`.
+    #[serde(default, rename = "instrument")]
+    pub instruments: HashMap<String, InstrumentConfig>,
 }
 
 /// NNG PUB/SUB broker settings (TCP transport).
@@ -205,16 +240,32 @@ impl SourceConfig {
     /// Convert to the ingest `DataSourceConfig`, validating exchange/region.
     ///
     /// `exchange` is the key from the parent `[source.<exchange>]` section.
-    pub fn to_data_source(&self, exchange: &str) -> Result<DataSourceConfig, ConfigError> {
+    /// `alias` is the instrument's HashMap key (used for fallback lookup).
+    /// `instrument_cfg` provides the per-instrument fields (`instrument`,
+    /// `suffix_topic`, `max_level`, `max_level_pct`).
+    ///
+    /// When `alias` is an empty string, it is passed as `None` to the
+    /// underlying `DataSourceConfig`, selecting the exchange-only fallback
+    /// rule (`fallback[exchange][""]`).
+    pub fn to_data_source(
+        &self,
+        exchange: &str,
+        alias: &str,
+        instrument_cfg: &InstrumentConfig,
+    ) -> Result<DataSourceConfig, ConfigError> {
         let (api_key, api_secret) = self.resolve_credentials(exchange);
         let data_source = DataSourceConfig {
             exchange: exchange.to_string(),
             region: self.region.clone(),
-            instrument: self.instrument.clone(),
+            instrument: instrument_cfg.instrument.clone(),
             data_kind: self.data_kind()?,
-            alias: self.alias.clone(),
-            max_level: self.max_level,
-            max_level_pct: self.max_level_pct,
+            alias: if alias.is_empty() {
+                None
+            } else {
+                Some(alias.to_string())
+            },
+            max_level: instrument_cfg.max_level,
+            max_level_pct: instrument_cfg.max_level_pct,
             checksum_log: self.checksum_log,
             crossguard_log: self.crossguard_log,
             resilience: self.resilience.clone(),
@@ -259,11 +310,29 @@ mod tests {
         unsafe { std::env::remove_var(name) }
     }
 
+    /// Helper: build a `SourceConfig` with a single instrument keyed by `alias`.
+    fn source_with_instrument(alias: &str, instrument: &str) -> SourceConfig {
+        SourceConfig {
+            region: "global".into(),
+            data_kind: "both".into(),
+            instruments: HashMap::from([(
+                alias.to_string(),
+                InstrumentConfig {
+                    instrument: instrument.to_string(),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
     const VALID_TOML: &str = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "both"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 
 [nng]
 port = 14242
@@ -272,13 +341,17 @@ port = 14242
     const MULTI_EXCHANGE_TOML: &str = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 
 [source.kraken]
 region = "global"
-instrument = "XBT/USD"
 data_kind = "trade"
+
+[source.kraken.instrument.btcusd]
+instrument = "XBT/USD"
 
 [nng]
 port = 14242
@@ -292,7 +365,11 @@ port = 14242
             .get("okx")
             .expect("okx source should be present");
         assert_eq!(source.region, "global");
-        assert_eq!(source.instrument, "BTC-USDT");
+        let inst = source
+            .instruments
+            .get("btcusd")
+            .expect("btcusd instrument should be present");
+        assert_eq!(inst.instrument, "BTC-USDT");
         assert_eq!(source.data_kind, "both");
         assert_eq!(config.nng.port, 14242);
     }
@@ -301,8 +378,10 @@ port = 14242
     fn applies_defaults_for_optional_fields() {
         let config = parse_config(VALID_TOML).unwrap();
         let source = config.source.get("okx").unwrap();
-        assert_eq!(source.max_level, None);
-        assert_eq!(source.max_level_pct, 0.0);
+        let inst = source.instruments.get("btcusd").unwrap();
+        assert_eq!(inst.max_level, None);
+        assert_eq!(inst.max_level_pct, 0.0);
+        assert!(inst.suffix_topic.is_none());
         assert_eq!(config.nng.port, DEFAULT_NNG_PORT);
     }
 
@@ -311,8 +390,10 @@ port = 14242
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 
 [nng]
 "#;
@@ -325,8 +406,10 @@ data_kind = "lob"
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 
 [nng]
 port = 9999
@@ -340,8 +423,11 @@ port = 9999
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
+
 [source.okx.resilience]
 initial_backoff_ms = 500
 max_backoff_ms = 5000
@@ -363,8 +449,11 @@ port = 14242
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
+
 [source.okx.resilience]
 initial_backoff_ms = 500
 max_backoff_ms = 5000
@@ -392,8 +481,11 @@ port = 14242
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
+
 [source.okx.resilience]
 initial_backoff_ms = 1000
 max_backoff_ms = 60000
@@ -406,7 +498,8 @@ port = 14242
 "#;
         let config = parse_config(toml).unwrap();
         let source = config.source.get("okx").unwrap();
-        let data_source = source.to_data_source("okx").unwrap();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("okx", "btcusd", inst).unwrap();
         assert_eq!(data_source.resilience.silence_timeout_secs, Some(30));
     }
 
@@ -468,7 +561,8 @@ port = 14242
             .next()
             .unwrap()
             .1;
-        let data_source = source.to_data_source("okx").unwrap();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("okx", "btcusd", inst).unwrap();
         assert_eq!(data_source.exchange, "okx");
         assert!(data_source.data_kind.contains(DataKind::LOB));
         assert!(data_source.data_kind.contains(DataKind::TRADE));
@@ -479,26 +573,32 @@ port = 14242
         let toml = r#"
 [source.binance]
 region = "global"
-instrument = "BTCUSDT"
 data_kind = "lob"
+
+[source.binance.instrument.btcusd]
+instrument = "BTCUSDT"
 
 [nng]
 port = 14242
 "#;
         let config = parse_config(toml).unwrap();
         let source = config.source.get("binance").unwrap();
-        let err = source.to_data_source("binance").unwrap_err();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let err = source
+            .to_data_source("binance", "btcusd", inst)
+            .unwrap_err();
         assert!(matches!(err, ConfigError::InvalidSource(_)));
     }
 
     #[test]
-    fn parses_alias_and_fallback_mapping_under_exchange_subkey() {
+    fn parses_instrument_sections_keyed_by_alias() {
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "btc/usdt"
-alias = "btcusd"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "btc/usdt"
 
 [source.okx.fallback.btcusd]
 base_mappings = ["BTC", "XBT"]
@@ -511,7 +611,11 @@ port = 14242
 "#;
         let config = parse_config(toml).unwrap();
         let source = config.source.get("okx").unwrap();
-        assert_eq!(source.alias.as_deref(), Some("btcusd"));
+        let inst = source
+            .instruments
+            .get("btcusd")
+            .expect("instrument section should be present");
+        assert_eq!(inst.instrument, "btc/usdt");
         let mapping = source
             .fallback
             .get("btcusd")
@@ -523,10 +627,11 @@ port = 14242
     }
 
     #[test]
-    fn applies_defaults_for_alias_and_fallback_when_omitted() {
+    fn applies_defaults_for_instruments_when_omitted() {
         let config = parse_config(VALID_TOML).unwrap();
         let source = config.source.get("okx").unwrap();
-        assert_eq!(source.alias, None);
+        // instruments has one entry (btcusd) from VALID_TOML
+        assert_eq!(source.instruments.len(), 1);
         assert!(source.fallback.is_empty());
     }
 
@@ -534,7 +639,8 @@ port = 14242
     fn suffix_topic_defaults_to_none_when_omitted() {
         let config = parse_config(VALID_TOML).unwrap();
         let source = config.source.get("okx").unwrap();
-        assert_eq!(source.suffix_topic, None);
+        let inst = source.instruments.get("btcusd").unwrap();
+        assert!(inst.suffix_topic.is_none());
     }
 
     #[test]
@@ -542,8 +648,10 @@ port = 14242
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "both"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 suffix_topic = "mytopic"
 
 [nng]
@@ -551,7 +659,8 @@ port = 14242
 "#;
         let config = parse_config(toml).unwrap();
         let source = config.source.get("okx").unwrap();
-        assert_eq!(source.suffix_topic.as_deref(), Some("mytopic"));
+        let inst = source.instruments.get("btcusd").unwrap();
+        assert_eq!(inst.suffix_topic.as_deref(), Some("mytopic"));
     }
 
     #[test]
@@ -559,8 +668,10 @@ port = 14242
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "both"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 suffix_topic = "btcusdt"
 
 [nng]
@@ -580,9 +691,10 @@ port = 14242
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "btc/usdt"
-alias = "btcusd"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "btc/usdt"
 
 [source.okx.fallback.btcusd]
 base_mappings = ["BTC"]
@@ -601,7 +713,8 @@ port = 14242
             .next()
             .unwrap()
             .1;
-        let data_source = source.to_data_source("okx").unwrap();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("okx", "btcusd", inst).unwrap();
         assert_eq!(data_source.alias.as_deref(), Some("btcusd"));
         let mapping = data_source
             .fallback
@@ -609,6 +722,75 @@ port = 14242
             .and_then(|a| a.get("btcusd"))
             .expect("fallback should be forwarded");
         assert_eq!(mapping.base_mappings, vec!["BTC"]);
+    }
+
+    #[test]
+    fn to_data_source_uses_empty_alias_as_none() {
+        let source = source_with_instrument("", "BTC-USDT");
+        let inst = source.instruments.get("").unwrap();
+        let data_source = source.to_data_source("okx", "", inst).unwrap();
+        assert_eq!(data_source.alias, None);
+    }
+
+    #[test]
+    fn validated_sources_builds_one_source_per_instrument() {
+        let config = parse_config(MULTI_EXCHANGE_TOML).unwrap();
+        let sources = config.validated_sources().unwrap();
+        assert_eq!(sources.len(), 2);
+        let exchanges: Vec<&str> = sources.iter().map(|(e, _, _, _)| e.as_str()).collect();
+        assert_eq!(exchanges, vec!["kraken", "okx"]);
+        let kraken = sources
+            .iter()
+            .find(|(e, _, _, _)| *e == "kraken")
+            .expect("kraken should be present");
+        assert_eq!(kraken.1, "XBT/USD");
+        let okx = sources
+            .iter()
+            .find(|(e, _, _, _)| *e == "okx")
+            .expect("okx should be present");
+        assert_eq!(okx.1, "BTC-USDT");
+    }
+
+    #[test]
+    fn validated_sources_builds_multiple_instruments_per_exchange() {
+        let toml = r#"
+[source.okx]
+region = "global"
+data_kind = "both"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
+
+[source.okx.instrument.ethusd]
+instrument = "ETH-USDT"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let sources = config.validated_sources().unwrap();
+        assert_eq!(sources.len(), 2);
+        // Sorted by alias: "btcusd" < "ethusd"
+        let instruments: Vec<&str> = sources.iter().map(|(_, i, _, _)| i.as_str()).collect();
+        assert_eq!(instruments, vec!["BTC-USDT", "ETH-USDT"]);
+    }
+
+    #[test]
+    fn validated_sources_errors_on_unknown_exchange() {
+        let toml = r#"
+[source.binance]
+region = "global"
+data_kind = "lob"
+
+[source.binance.instrument.btcusd]
+instrument = "BTCUSDT"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let result = config.validated_sources();
+        assert!(result.is_err());
     }
 
     #[test]
@@ -629,52 +811,21 @@ port = 14242
     }
 
     #[test]
-    fn validated_sources_builds_one_data_source_per_exchange() {
-        let config = parse_config(MULTI_EXCHANGE_TOML).unwrap();
-        let sources = config.validated_sources().unwrap();
-        assert_eq!(sources.len(), 2);
-        let exchanges: Vec<&str> = sources.iter().map(|(e, _, _, _)| e.as_str()).collect();
-        assert_eq!(exchanges, vec!["kraken", "okx"]);
-        let kraken = sources
-            .iter()
-            .find(|(e, _, _, _)| *e == "kraken")
-            .expect("kraken should be present");
-        assert_eq!(kraken.1, "XBT/USD");
-        let okx = sources
-            .iter()
-            .find(|(e, _, _, _)| *e == "okx")
-            .expect("okx should be present");
-        assert_eq!(okx.1, "BTC-USDT");
-    }
-
-    #[test]
-    fn validated_sources_errors_on_unknown_exchange() {
-        let toml = r#"
-[source.binance]
-region = "global"
-instrument = "BTCUSDT"
-data_kind = "lob"
-
-[nng]
-port = 14242
-"#;
-        let config = parse_config(toml).unwrap();
-        let result = config.validated_sources();
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn override_silence_timeout_secs_sets_value_on_all_sources() {
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 
 [source.kraken]
 region = "global"
-instrument = "XBT/USD"
 data_kind = "trade"
+
+[source.kraken.instrument.btcusd]
+instrument = "XBT/USD"
 
 [nng]
 port = 14242
@@ -691,8 +842,10 @@ port = 14242
         let toml = r#"
 [source.okx]
 region = "global"
-instrument = "BTC-USDT"
 data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
 
 [nng]
 port = 14242
@@ -710,10 +863,12 @@ port = 14242
         let toml = r#"
 [source.bitvavo]
 region = "global"
-instrument = "BTC-EUR"
 data_kind = "both"
 api_key = "my-key"
 api_secret = "my-secret"
+
+[source.bitvavo.instrument.btcusd]
+instrument = "BTC-EUR"
 
 [nng]
 port = 14242
@@ -736,7 +891,6 @@ port = 14242
     fn resolve_credentials_returns_config_value_when_present() {
         let source = SourceConfig {
             region: "global".into(),
-            instrument: "BTC-EUR".into(),
             data_kind: "both".into(),
             api_key: Some("config-key".into()),
             api_secret: Some("config-secret".into()),
@@ -752,7 +906,6 @@ port = 14242
         let _guard = ENV_LOCK.lock().unwrap();
         let source = SourceConfig {
             region: "global".into(),
-            instrument: "BTC-EUR".into(),
             data_kind: "both".into(),
             ..Default::default()
         };
@@ -772,7 +925,6 @@ port = 14242
         remove_env("BITVAVO_API_SECRET");
         let source = SourceConfig {
             region: "global".into(),
-            instrument: "BTC-EUR".into(),
             data_kind: "both".into(),
             ..Default::default()
         };
@@ -788,7 +940,6 @@ port = 14242
         set_env("BITVAVO_API_SECRET", "should-not-apply");
         let source = SourceConfig {
             region: "global".into(),
-            instrument: "BTC-USDT".into(),
             data_kind: "both".into(),
             ..Default::default()
         };
@@ -806,7 +957,6 @@ port = 14242
         set_env("BITVAVO_API_SECRET", "env-secret");
         let source = SourceConfig {
             region: "global".into(),
-            instrument: "BTC-EUR".into(),
             data_kind: "both".into(),
             api_key: Some("config-key".into()),
             api_secret: Some("config-secret".into()),
@@ -821,28 +971,25 @@ port = 14242
 
     #[test]
     fn to_data_source_forwards_api_credentials() {
-        let source = SourceConfig {
-            region: "global".into(),
-            instrument: "BTC-EUR".into(),
-            data_kind: "both".into(),
-            api_key: Some("my-key".into()),
-            api_secret: Some("my-secret".into()),
-            ..Default::default()
-        };
-        let data_source = source.to_data_source("bitvavo").unwrap();
+        let mut source = source_with_instrument("btcusd", "BTC-EUR");
+        source.api_key = Some("my-key".into());
+        source.api_secret = Some("my-secret".into());
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("bitvavo", "btcusd", inst).unwrap();
         assert_eq!(data_source.api_key, Some("my-key".into()));
         assert_eq!(data_source.api_secret, Some("my-secret".into()));
     }
 
     #[test]
     fn to_data_source_sets_credentials_none_for_okx() {
+        let source = source_with_instrument("btcusd", "BTC-USDT");
         let source = SourceConfig {
             region: "global".into(),
-            instrument: "BTC-USDT".into(),
             data_kind: "lob".into(),
-            ..Default::default()
+            ..source
         };
-        let data_source = source.to_data_source("okx").unwrap();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("okx", "btcusd", inst).unwrap();
         assert_eq!(data_source.api_key, None);
         assert_eq!(data_source.api_secret, None);
     }
@@ -852,13 +999,9 @@ port = 14242
         let _guard = ENV_LOCK.lock().unwrap();
         remove_env("BITVAVO_API_KEY");
         remove_env("BITVAVO_API_SECRET");
-        let source = SourceConfig {
-            region: "global".into(),
-            instrument: "BTC-EUR".into(),
-            data_kind: "both".into(),
-            ..Default::default()
-        };
-        let result = source.to_data_source("bitvavo");
+        let source = source_with_instrument("btcusd", "BTC-EUR");
+        let inst = source.instruments.get("btcusd").unwrap();
+        let result = source.to_data_source("bitvavo", "btcusd", inst);
         assert!(result.is_err());
         assert!(
             result
@@ -870,15 +1013,11 @@ port = 14242
 
     #[test]
     fn bitvavo_with_credentials_passes_validation() {
-        let source = SourceConfig {
-            region: "global".into(),
-            instrument: "BTC-EUR".into(),
-            data_kind: "both".into(),
-            api_key: Some("my-key".into()),
-            api_secret: Some("my-secret".into()),
-            ..Default::default()
-        };
-        let result = source.to_data_source("bitvavo");
+        let mut source = source_with_instrument("btcusd", "BTC-EUR");
+        source.api_key = Some("my-key".into());
+        source.api_secret = Some("my-secret".into());
+        let inst = source.instruments.get("btcusd").unwrap();
+        let result = source.to_data_source("bitvavo", "btcusd", inst);
         assert!(result.is_ok());
     }
 
@@ -887,13 +1026,9 @@ port = 14242
         let _guard = ENV_LOCK.lock().unwrap();
         set_env("BITVAVO_API_KEY", "env-key");
         set_env("BITVAVO_API_SECRET", "env-secret");
-        let source = SourceConfig {
-            region: "global".into(),
-            instrument: "BTC-EUR".into(),
-            data_kind: "both".into(),
-            ..Default::default()
-        };
-        let result = source.to_data_source("bitvavo");
+        let source = source_with_instrument("btcusd", "BTC-EUR");
+        let inst = source.instruments.get("btcusd").unwrap();
+        let result = source.to_data_source("bitvavo", "btcusd", inst);
         remove_env("BITVAVO_API_KEY");
         remove_env("BITVAVO_API_SECRET");
         assert!(result.is_ok());
@@ -907,10 +1042,12 @@ port = 14242
         let toml = r#"
 [source.bitvavo]
 region = "global"
-instrument = "BTC-EUR"
 data_kind = "both"
 api_key = "toml-key"
 api_secret = "toml-secret"
+
+[source.bitvavo.instrument.btcusd]
+instrument = "BTC-EUR"
 suffix_topic = "btceur"
 
 [nng]
@@ -937,11 +1074,12 @@ port = 14242
         let toml = r#"
 [source.kraken]
 region = "global"
-instrument = "btcusd"
 data_kind = "both"
-alias = "btcusd"
-suffix_topic = "btcusd"
 checksum_log = true
+
+[source.kraken.instrument.btcusd]
+instrument = "btcusd"
+suffix_topic = "btcusd"
 max_level = 3
 
 [nng]
@@ -960,11 +1098,12 @@ port = 14242
         let toml = r#"
 [source.kraken]
 region = "global"
-instrument = "btcusd"
 data_kind = "both"
-alias = "btcusd"
-suffix_topic = "btcusd"
 checksum_log = true
+
+[source.kraken.instrument.btcusd]
+instrument = "btcusd"
+suffix_topic = "btcusd"
 max_level = 3
 
 [nng]
@@ -1011,11 +1150,12 @@ port = 14242
         let toml = r#"
 [source.kraken]
 region = "global"
-instrument = "btcusd"
 data_kind = "both"
-alias = "btcusd"
-suffix_topic = "btcusd"
 crossguard_log = true
+
+[source.kraken.instrument.btcusd]
+instrument = "btcusd"
+suffix_topic = "btcusd"
 max_level = 3
 
 [nng]
@@ -1034,11 +1174,12 @@ port = 14242
         let toml = r#"
 [source.kraken]
 region = "global"
-instrument = "btcusd"
 data_kind = "both"
-alias = "btcusd"
-suffix_topic = "btcusd"
 crossguard_log = true
+
+[source.kraken.instrument.btcusd]
+instrument = "btcusd"
+suffix_topic = "btcusd"
 max_level = 3
 
 [nng]
@@ -1068,5 +1209,89 @@ port = 14242
             !okx.2.crossguard_log,
             "crossguard_log must default to false in DataSourceConfig when omitted"
         );
+    }
+
+    #[test]
+    fn multiple_instruments_share_exchange_level_fallback() {
+        let toml = r#"
+[source.okx]
+region = "global"
+data_kind = "lob"
+
+[source.okx.fallback.btcusd]
+base_mappings = ["BTC", "XBT"]
+quote_mappings = ["USDT", "USD"]
+separator_mappings = ["-", "/"]
+case_fallback = "upper"
+
+[source.okx.fallback.ethusd]
+base_mappings = ["ETH"]
+quote_mappings = ["USDT"]
+separator_mappings = ["-"]
+case_fallback = "upper"
+
+[source.okx.instrument.btcusd]
+instrument = "btc/usdt"
+
+[source.okx.instrument.ethusd]
+instrument = "eth/usdt"
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let sources = config.validated_sources().unwrap();
+        assert_eq!(sources.len(), 2);
+
+        // BTC instrument uses the btcusd fallback
+        let btc = sources
+            .iter()
+            .find(|(_, i, _, _)| *i == "btc/usdt")
+            .expect("btc instrument should be present");
+        assert_eq!(btc.2.alias.as_deref(), Some("btcusd"));
+        let btc_fallback = btc
+            .2
+            .fallback
+            .get("okx")
+            .and_then(|a| a.get("btcusd"))
+            .expect("btcusd fallback should be forwarded");
+        assert_eq!(btc_fallback.base_mappings, vec!["BTC", "XBT"]);
+
+        // ETH instrument uses the ethusd fallback
+        let eth = sources
+            .iter()
+            .find(|(_, i, _, _)| *i == "eth/usdt")
+            .expect("eth instrument should be present");
+        assert_eq!(eth.2.alias.as_deref(), Some("ethusd"));
+        let eth_fallback = eth
+            .2
+            .fallback
+            .get("okx")
+            .and_then(|a| a.get("ethusd"))
+            .expect("ethusd fallback should be forwarded");
+        assert_eq!(eth_fallback.base_mappings, vec!["ETH"]);
+    }
+
+    #[test]
+    fn to_data_source_forward_max_level_and_max_level_pct() {
+        let toml = r#"
+[source.okx]
+region = "global"
+data_kind = "both"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
+max_level = 5
+max_level_pct = 50.0
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("okx").unwrap();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("okx", "btcusd", inst).unwrap();
+        assert_eq!(data_source.max_level, Some(5));
+        assert_eq!(data_source.max_level_pct, 50.0);
     }
 }

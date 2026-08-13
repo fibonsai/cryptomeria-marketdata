@@ -69,21 +69,30 @@ over a TCP socket using NNG pub/sub.
 - Follow Rust idioms and Rustfmt conventions
 - Clippy warnings treated as errors in CI
 - Documentation comments encouraged for public APIs
-- Add new config fields: Extend `SourceConfig`/`NngConfig` in `src/config.rs`
+- Add new config fields: Extend `SourceConfig` (exchange-level) or
+  `InstrumentConfig` (per-instrument) in `src/config.rs`
 - Add new data handling: Extend `forward.rs` (topic/payload/log helpers)
 - Configuration includes resilience settings, snapshot depth, level filtering
 - **ALWAYS load `rust-coding` and `rust-tdd` skills before writing, reviewing, or refactoring any Rust code**
 
 ## Configuration
-- See `src/config.rs` for `AppConfig`, `SourceConfig`, `NngConfig`
+- See `src/config.rs` for `AppConfig`, `SourceConfig`, `InstrumentConfig`, `NngConfig`
 - A `.env` file is loaded at startup (best-effort) via `dotenvy`; see `src/env.rs` and ADR-012
 - Supported exchanges: "okx", "kraken", "bitstamp", "bitvavo"
 - Data kinds: "lob", "trade", "both", "lob|trade"
+- Per-exchange fields (shared by all instruments): `region`, `data_kind`, `checksum_log`,
+  `crossguard_log`, `resilience`, `fallback`, `api_key`, `api_secret`
+- Per-instrument fields under `[source.<exchange>.instrument.<alias>]`: `instrument`,
+  `suffix_topic`, `max_level`, `max_level_pct`; the `<alias>` key selects the matching
+  `[source.<exchange>.fallback.<alias>]` mapping (empty alias "" → exchange-only fallback);
+  see ADR-014
 - Resilience settings: initial_backoff_ms, max_backoff_ms, backoff_multiplier, jitter_ms, heartbeat_interval_secs, max_attempts
-- Instrument fallback: `alias` (optional) selects a per-exchange fallback mapping under `[source.<exchange>.fallback.<alias>]`; `fallback` maps alias → `ExchangeFallbackMapping` (base/quote/separator/case) within each `[source.<exchange>]` section
 - Topic suffix override: `suffix_topic` (optional) — when set, NNG topics use `{kind}__{suffix_topic}` verbatim instead of `{kind}__{normalized_instrument}`; useful for cross-exchange disambiguation since the exchange is not part of the topic
 - NNG port: default 14242 (configurable in `[nng]` section or `--port` CLI flag)
-- Multiple `[source.*]` sections are all consumed in parallel (one task per exchange); a single `SourceConfig` is still accepted and behaves exactly as before
+- Multiple `[source.*]` sections are all consumed in parallel (one task per exchange);
+  each exchange can have multiple `[source.<exchange>.instrument.<alias>]` sections
+  (one task per instrument); a single `SourceConfig` is still accepted and behaves
+  the same as before (see ADR-014)
 
 ## Adding Tests
 - Unit tests live in `#[cfg(test)] mod tests` blocks alongside source (e.g. `config.rs`, `forward.rs`, `broker.rs`, `subscriber.rs`, `env.rs`)
