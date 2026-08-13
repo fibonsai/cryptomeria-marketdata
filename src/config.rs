@@ -4,6 +4,16 @@ use std::collections::HashMap;
 
 const DEFAULT_NNG_PORT: u16 = 14242;
 
+/// Default number of diff-order-book deltas to buffer before fetching a REST
+/// snapshot. Mirrors CCXT Pro's `delta_cache_limit` and
+/// `cryptomeria_ingest::config::default_snapshot_delay()`.
+///
+/// Set `snapshot_delay = 0` on an instrument to disable delta buffering
+/// (fetch the snapshot immediately on connect/reconnect).
+pub fn default_snapshot_delay() -> usize {
+    6
+}
+
 /// A single validated exchange source: exchange id, instrument symbol,
 /// data source config, and optional topic suffix override.
 pub type ValidatedSource = (String, String, DataSourceConfig, Option<String>);
@@ -89,7 +99,7 @@ impl AppConfig {
 /// Using an empty-string alias key (`[source.<exchange>.instrument.""]`)
 /// selects the exchange-only fallback rule (i.e. `alias = None` in the
 /// underlying `DataSourceConfig`).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct InstrumentConfig {
     /// Instrument symbol in exchange-native format.
     pub instrument: String,
@@ -106,6 +116,32 @@ pub struct InstrumentConfig {
     /// levels kept).
     #[serde(default)]
     pub max_level_pct: f64,
+    /// Number of diff-order-book deltas to buffer before fetching the REST
+    /// snapshot (Bitstamp delta-buffering pattern, mirroring CCXT Pro's
+    /// `delta_cache_limit`). After this many deltas have been buffered, the
+    /// adapter signals `snapshot_needed()` and the wsloop fetches the snapshot,
+    /// then replays buffered deltas whose timestamp is >= the snapshot's.
+    ///
+    /// Default: `6`. Set to `0` to disable delta buffering (fetch snapshot
+    /// immediately on connect/reconnect, no buffering). Only affects exchanges
+    /// that implement the delta-buffering pattern (Bitstamp LOB).
+    ///
+    /// See [ADR-026](https://github.com/fibonsai/cryptomeria-ingest/blob/main/docs/adr/Integration/ADR-026-20260813-bitstamp-delta-buffering-ccxt-pro.md)
+    /// in `cryptomeria-ingest`.
+    #[serde(default = "default_snapshot_delay")]
+    pub snapshot_delay: usize,
+}
+
+impl Default for InstrumentConfig {
+    fn default() -> Self {
+        Self {
+            instrument: String::new(),
+            suffix_topic: None,
+            max_level: None,
+            max_level_pct: 0.0,
+            snapshot_delay: default_snapshot_delay(),
+        }
+    }
 }
 
 /// Exchange WebSocket subscription settings.
@@ -242,7 +278,7 @@ impl SourceConfig {
     /// `exchange` is the key from the parent `[source.<exchange>]` section.
     /// `alias` is the instrument's HashMap key (used for fallback lookup).
     /// `instrument_cfg` provides the per-instrument fields (`instrument`,
-    /// `suffix_topic`, `max_level`, `max_level_pct`).
+    /// `suffix_topic`, `max_level`, `max_level_pct`, `snapshot_delay`).
     ///
     /// When `alias` is an empty string, it is passed as `None` to the
     /// underlying `DataSourceConfig`, selecting the exchange-only fallback
@@ -268,6 +304,7 @@ impl SourceConfig {
             max_level_pct: instrument_cfg.max_level_pct,
             checksum_log: self.checksum_log,
             crossguard_log: self.crossguard_log,
+            snapshot_delay: instrument_cfg.snapshot_delay,
             resilience: self.resilience.clone(),
             fallback: HashMap::from([(exchange.to_string(), self.fallback.clone())]),
             api_key,
@@ -1293,5 +1330,65 @@ port = 14242
         let data_source = source.to_data_source("okx", "btcusd", inst).unwrap();
         assert_eq!(data_source.max_level, Some(5));
         assert_eq!(data_source.max_level_pct, 50.0);
+    }
+
+    #[test]
+    fn snapshot_delay_defaults_to_ingest_default_when_omitted() {
+        let config = parse_config(VALID_TOML).unwrap();
+        let source = config.source.get("okx").unwrap();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("okx", "btcusd", inst).unwrap();
+        assert_eq!(
+            data_source.snapshot_delay, 6,
+            "snapshot_delay must default to 6 when omitted from config"
+        );
+    }
+
+    #[test]
+    fn parses_snapshot_delay_when_present() {
+        let toml = r#"
+[source.okx]
+region = "global"
+data_kind = "lob"
+
+[source.okx.instrument.btcusd]
+instrument = "BTC-USDT"
+snapshot_delay = 10
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("okx").unwrap();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("okx", "btcusd", inst).unwrap();
+        assert_eq!(
+            data_source.snapshot_delay, 10,
+            "snapshot_delay must be forwarded from config"
+        );
+    }
+
+    #[test]
+    fn to_data_source_forwards_snapshot_delay_zero() {
+        let toml = r#"
+[source.bitstamp]
+region = "global"
+data_kind = "lob"
+
+[source.bitstamp.instrument.btcusd]
+instrument = "BTC/USD"
+snapshot_delay = 0
+
+[nng]
+port = 14242
+"#;
+        let config = parse_config(toml).unwrap();
+        let source = config.source.get("bitstamp").unwrap();
+        let inst = source.instruments.get("btcusd").unwrap();
+        let data_source = source.to_data_source("bitstamp", "btcusd", inst).unwrap();
+        assert_eq!(
+            data_source.snapshot_delay, 0,
+            "snapshot_delay = 0 must disable delta buffering"
+        );
     }
 }

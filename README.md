@@ -83,6 +83,7 @@ max_level = 10             # optional: limit order book depth per side
 max_level_pct = 0.0        # optional: max % from best price (conflicts with max_level)
 # checksum_log = true      # optional: warn on Kraken checksum mismatch (default false)
 # crossguard_log = true    # optional: warn on Kraken crossing-guard rejection (default false)
+# snapshot_delay = 6       # optional: diff-order-book deltas to buffer before REST snapshot (default 6; 0 = disabled)
 
 [source.okx.resilience]
 initial_backoff_ms = 1000

@@ -83,9 +83,10 @@ over a TCP socket using NNG pub/sub.
 - Per-exchange fields (shared by all instruments): `region`, `data_kind`, `checksum_log`,
   `crossguard_log`, `resilience`, `fallback`, `api_key`, `api_secret`
 - Per-instrument fields under `[source.<exchange>.instrument.<alias>]`: `instrument`,
-  `suffix_topic`, `max_level`, `max_level_pct`; the `<alias>` key selects the matching
+  `suffix_topic`, `max_level`, `max_level_pct`, `snapshot_delay`; the `<alias>` key selects the matching
   `[source.<exchange>.fallback.<alias>]` mapping (empty alias "" → exchange-only fallback);
-  see ADR-014
+  see ADR-014. `snapshot_delay` (default 6, ADR-015) controls the number of diff-order-book
+  deltas to buffer before fetching a REST snapshot (CCXT Pro pattern); set to 0 to disable.
 - Resilience settings: initial_backoff_ms, max_backoff_ms, backoff_multiplier, jitter_ms, heartbeat_interval_secs, max_attempts
 - Topic suffix override: `suffix_topic` (optional) — when set, NNG topics use `{kind}__{suffix_topic}` verbatim instead of `{kind}__{normalized_instrument}`; useful for cross-exchange disambiguation since the exchange is not part of the topic
 - NNG port: default 14242 (configurable in `[nng]` section or `--port` CLI flag)

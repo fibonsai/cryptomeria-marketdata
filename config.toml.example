@@ -39,6 +39,11 @@ max_level_pct = 0.0
 # a mismatch is only logged at DEBUG level. Prevents an exchange feed
 # from injecting log lines that interpolate an exchange-controlled value.
 # checksum_log = true
+# Number of diff-order-book deltas to buffer before fetching the REST
+# snapshot (Bitstamp delta-buffering pattern, CCXT Pro). Default 6.
+# Set to 0 to disable delta buffering (fetch snapshot immediately).
+# See ADR-026 in cryptomeria-ingest.
+# snapshot_delay = 6
 
 [source.okx.resilience]
 # Initial backoff in milliseconds
@@ -87,6 +92,11 @@ instrument = "btcusd"
 suffix_topic = "btcusd"
 max_level = 3
 max_level_pct = 0.0
+# Number of diff-order-book deltas to buffer before fetching the REST
+# snapshot (Bitstamp delta-buffering pattern, CCXT Pro). Default 6.
+# Set to 0 to disable delta buffering (fetch snapshot immediately).
+# See ADR-026 in cryptomeria-ingest.
+# snapshot_delay = 6
 # checksum_log = true
 
 [source.kraken.resilience]
@@ -118,6 +128,11 @@ case_fallback = "upper"
 ##suffix_topic = "btcusd"
 ##max_level = 3
 ##max_level_pct = 0.0
+### Number of diff-order-book deltas to buffer before fetching the REST
+### snapshot (Bitstamp delta-buffering pattern, CCXT Pro). Default 6.
+### Set to 0 to disable delta buffering (fetch snapshot immediately).
+### See ADR-026 in cryptomeria-ingest.
+##snapshot_delay = 6
 ##
 ##[source.bitstamp.resilience]
 ##initial_backoff_ms = 1000
