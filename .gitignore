@@ -71,8 +71,6 @@ cobertura.xml
 # Ignore TODO temp file
 TODO
 
-# Stray docs assets
-docs/assets/
 .worktrees/
 
 # ignore configs
